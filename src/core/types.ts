@@ -129,6 +129,11 @@ export interface FaceDef {
   solid?: boolean;
   /** Raised graphics taller than `max` mm break something (a fit, stacking); `why` finishes the warning. */
   raiseLimit?: { max: number; why: string };
+  /**
+   * Free space behind the wall (mm) that a lithophane may fill beyond `thickness`. 0 (the default) where
+   * a mating part, a lid lip or a drawer sits behind the face.
+   */
+  innerRoom?: number;
 }
 
 export interface PartInfo {

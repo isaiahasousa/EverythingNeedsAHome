@@ -1,17 +1,9 @@
+import { hashString as hash } from '../core/hash';
 import type { Graphic, GraphicSource, Shape2D } from '../core/types';
 import { traceImage } from './raster';
 import { builtinShape, patternShape } from './shapes';
 import { svgShape } from './svg';
 import { onFontRegistered, textShape } from './text';
-
-function hash(s: string): string {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i += Math.max(1, Math.floor(s.length / 4096))) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(36) + ':' + s.length;
-}
 
 /** Cache key for the outline of a source; size-dependent sources (patterns) include the size. */
 export function sourceKey(src: GraphicSource, g?: Pick<Graphic, 'w' | 'h'>): string {

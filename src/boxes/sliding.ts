@@ -1,7 +1,7 @@
 import { clipConvex, IDENTITY, rectPoints, roundedRectPoints, signedArea } from '../core/math';
 import { box, loftRoundedRect, profileXZ, profileYZ, prism, rrect, unionAll } from '../geometry/kernel';
 import type { BoxParams, Resolved } from '../core/types';
-import { bottomFace, clampRadius, commonWarnings, F, fmt, notchOutline, planeFace, rectDims, wallFaces, type BoxType } from './common';
+import { bottomFace, cavityRoom, clampRadius, commonWarnings, F, floorRoom, fmt, notchOutline, planeFace, rectDims, wallFaces, withRoom, type BoxType } from './common';
 
 function resolve(p: BoxParams): Resolved {
   const lt = p.slideLid;
@@ -77,10 +77,11 @@ export const sliding: BoxType = {
     const lidFaces = Math.abs(signedArea(lidOutline)) >= 20 ? [planeFace('lid-top', 'Lid top', 'lid', [0, cy, H], [1, 0, 0], [0, 1, 0], [0, 0, 1], lidW, lidD, lt, { outline: lidOutline })] : [];
     return [
       // The front wall stops under the lid; the others are thinned by the dovetail slot above H - lt.
-      ...wallFaces('base', W, D, 0, H - lt, r, p.wall, '', '', ['front']),
-      ...wallFaces('base', W, D, 0, H - lt - 0.3, r, p.wall, '', '', ['back', 'left', 'right']),
+      // The lid rides in the walls' slot, so the cavity behind the walls is free for lithophanes.
+      ...withRoom(wallFaces('base', W, D, 0, H - lt, r, p.wall, '', '', ['front']), cavityRoom(R)),
+      ...withRoom(wallFaces('base', W, D, 0, H - lt - 0.3, r, p.wall, '', '', ['back', 'left', 'right']), cavityRoom(R)),
       ...lidFaces,
-      bottomFace('base', W, D, r, p.floor),
+      { ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R) },
     ];
   },
   parts(_p, R) {

@@ -1,5 +1,6 @@
 import type { Font, PathCommand } from 'opentype.js';
 import type { Shape2D, Vec2 } from '../core/types';
+import { hashString } from '../core/hash';
 import { EMPTY_SHAPE, makeShape } from './shape2d';
 
 export interface FontInfo {
@@ -72,14 +73,8 @@ export function loadFont(id: string): Promise<Font> {
   return p;
 }
 
-function fingerprint(data: string): string {
-  let h = 2166136261;
-  for (let i = 0; i < data.length; i += Math.max(1, Math.floor(data.length / 8192))) {
-    h ^= data.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return `${data.length}:${(h >>> 0).toString(36)}`;
-}
+/** Identifies a font file by its whole contents. */
+const fingerprint = (data: string) => hashString(data);
 
 export function bufferToBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
@@ -113,7 +108,7 @@ export async function registerCustomFont(buf: ArrayBuffer, name: string): Promis
   const data = bufferToBase64(buf);
   const print = fingerprint(data);
   // The id names the file's contents: another font uploaded under the same name gets its own id.
-  const id = `custom:${name}#${print.replace(':', '-')}`;
+  const id = `custom:${name}#${print}`;
   setCustomFont(id, Promise.resolve(font), print);
   return { id, name, data };
 }

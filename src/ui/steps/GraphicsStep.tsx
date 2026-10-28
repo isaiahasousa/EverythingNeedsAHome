@@ -288,7 +288,7 @@ export function GraphicsStep() {
         <section className="section">
           <h3 className="section-title">Not on this box</h3>
           <p className="field-help" style={{ margin: 0 }}>
-            These graphics belong to faces this box type does not have. Move them or they stay hidden.
+            These graphics are on faces this box does not have with the current settings, so they are left out of the model. Move them to another face.
           </p>
           {orphans.map((g) => (
             <Select

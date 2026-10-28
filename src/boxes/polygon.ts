@@ -2,7 +2,7 @@ import type { CrossSection, Manifold } from 'manifold-3d';
 import { IDENTITY, regularPolygon, rotX, roundedPolygonPoints } from '../core/math';
 import { poly, prism } from '../geometry/kernel';
 import type { BoxParams, FaceDef, LidStyle, PartInfo, Resolved, Vec2 } from '../core/types';
-import { commonWarnings, F, planeFace, topNotchOutline, type BoxType } from './common';
+import { cavityRoom, commonWarnings, F, floorRoom, planeFace, topNotchOutline, type BoxType } from './common';
 import { buildLidShell, lidGroup, lidLayout, lidWarnings, snapNotch, type SideAnchor } from './lidded';
 
 function resolve(p: BoxParams): Resolved {
@@ -10,7 +10,10 @@ function resolve(p: BoxParams): Resolved {
   const lt = p.polyLid ? Math.min(p.lidTop, p.lidHeight) : 0;
   const inner = p.dimsMode === 'inner';
   const flats = inner ? p.diameter + 2 * p.wall : p.diameter;
-  const H = inner ? p.height + p.floor + lt : p.height;
+  // Inside sizes are usable space. An inset plug lid is narrower than the box all the way up (its lip
+  // hangs inside the walls), so the full-width space ends where the lip starts.
+  const plug = p.polyLid && p.lidStyle === 'plug';
+  const H = inner ? p.height + p.floor + (plug ? p.lipHeight + Math.max(p.lidHeight, lt) : lt) : p.height;
   const Rc = flats / 2 / Math.cos(Math.PI / N);
   const L = p.polyLid ? lidLayout(p, H) : { style: 'plug' as LidStyle, lt: 0, Hl: 0, lipH: 0, Hb: H, neck: 0, skirt: p.wall };
   const rp = Math.max(0, Math.min(p.polyRound, flats / 4));
@@ -21,13 +24,14 @@ function resolve(p: BoxParams): Resolved {
   const spanY = Math.max(...pts.map(([, y]) => y)) - Math.min(...pts.map(([, y]) => y)) + 2 * rp;
   return {
     outer: [spanX + capGrow, spanY + capGrow, H],
-    inner: [flats - 2 * p.wall, flats - 2 * p.wall, H - p.floor - L.lt],
+    inner: [flats - 2 * p.wall, flats - 2 * p.wall, plug ? L.Hb - L.lipH - p.floor : H - p.floor - L.lt],
     N,
     flats,
     Rc,
     H,
     rp,
     minSpan: flats,
+    clearH: H - p.floor - L.lt,
     ...L,
   };
 }
@@ -76,8 +80,10 @@ export const polygon: BoxType = {
     // Keep graphics off the snap grooves cut into the inside of the walls.
     const notch = lid ? snapNotch(p, R, sideLen) : null;
     const outline = notch ? topNotchOutline(sideLen, top, { kind: 'rect', ...notch }) : undefined;
+    // Lithophanes may reach inward past the walls unless a plug lip comes down inside them.
+    const innerRoom = lid && style === 'plug' ? 0 : cavityRoom(R);
     const faces: FaceDef[] = sideFrames(R, apothem).map(({ k, n, u, o }) =>
-      planeFace(k === 0 ? 'front' : `side${k + 1}`, k === 0 ? 'Side 1 (front)' : `Side ${k + 1}`, 'base', [o[0], o[1], top / 2], u, [0, 0, 1], n, sideLen, top, p.wall, { outline }),
+      planeFace(k === 0 ? 'front' : `side${k + 1}`, k === 0 ? 'Side 1 (front)' : `Side ${k + 1}`, 'base', [o[0], o[1], top / 2], u, [0, 0, 1], n, sideLen, top, p.wall, { outline, innerRoom }),
     );
     // The real rounded outline: graphics clipped to it never reach past a rounded corner.
     const outlinePts = roundedPolygonPoints(N, Rc, rp);
@@ -87,7 +93,7 @@ export const polygon: BoxType = {
       faces.push(planeFace('lid-top', 'Lid top', 'lid', [0, 0, H], [1, 0, 0], [0, 1, 0], [0, 0, 1], 2 * Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1])) - Math.min(...pts.map((q) => q[1])), R.lt as number, { onBed: true, outline: pts }));
     }
     const bottomPts: Vec2[] = outlinePts.map(([x, y]) => [x, -y] as Vec2).reverse();
-    faces.push(planeFace('bottom', 'Bottom', 'base', [0, 0, 0], [1, 0, 0], [0, -1, 0], [0, 0, -1], R.outer[0], R.outer[1], p.floor, { onBed: true, outline: bottomPts }));
+    faces.push(planeFace('bottom', 'Bottom', 'base', [0, 0, 0], [1, 0, 0], [0, -1, 0], [0, 0, -1], R.outer[0], R.outer[1], p.floor, { onBed: true, outline: bottomPts, innerRoom: floorRoom(R) }));
     return faces;
   },
   parts(p, R) {

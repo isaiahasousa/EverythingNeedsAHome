@@ -2,7 +2,7 @@ import type { Manifold } from 'manifold-3d';
 import { IDENTITY } from '../core/math';
 import { box, cylZ, loftRoundedRect, profileYZ, prism, rrect, unionAll } from '../geometry/kernel';
 import type { BoxParams, FaceDef, Resolved } from '../core/types';
-import { planeFace, wallFaces, type BoxType } from './common';
+import { cavityRoom, planeFace, wallFaces, type BoxType } from './common';
 import { dividerCentres } from './tray';
 
 // Gridfinity reference dimensions (42 mm grid, 7 mm height units).
@@ -81,7 +81,7 @@ export const gridfinity: BoxType = {
     // Bins sit 0.25 mm apart on the grid: anything raised further on the outside hits the neighbour.
     const gridFit = { max: GF.gap / 2, why: 'the bin will no longer fit its grid beside other bins' };
     const walls = (which: ('front' | 'back' | 'left' | 'right')[], z1: number) =>
-      wallFaces('bin', W, D, bottom, z1, GF.radius, tw, '', '', which).map((f) => ({ ...f, raiseLimit: gridFit }));
+      wallFaces('bin', W, D, bottom, z1, GF.radius, tw, '', '', which).map((f) => ({ ...f, raiseLimit: gridFit, innerRoom: cavityRoom(R) }));
     const faces: FaceDef[] = walls(['front', 'left', 'right'], top);
     const backTop = R.label ? Math.min(top, (R.shelfBottom as number) - 0.3) : top;
     if (backTop - bottom >= 5) faces.push(...walls(['back'], backTop));

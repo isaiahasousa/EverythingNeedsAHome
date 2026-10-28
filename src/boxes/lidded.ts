@@ -2,7 +2,7 @@ import type { CrossSection, Manifold } from 'manifold-3d';
 import { IDENTITY, rotX } from '../core/math';
 import { K, prism, rrect, segs, unionAll } from '../geometry/kernel';
 import type { BoxParams, FaceDef, LidStyle, Resolved, Vec2, Warning } from '../core/types';
-import { bottomFace, clampRadius, commonWarnings, F, fmt, rectDims, topFace, topNotchOutline, wallFaces, type BoxType } from './common';
+import { bottomFace, cavityRoom, clampRadius, commonWarnings, F, floorRoom, fmt, rectDims, topFace, topNotchOutline, wallFaces, withRoom, type BoxType } from './common';
 
 export interface SideAnchor {
   /** Point on the outer face at the middle of a straight side, and its outward normal. */
@@ -127,21 +127,24 @@ export function buildLidShell(o: LidShellOpts): { base: Manifold; lid: Manifold 
 }
 
 function resolve(p: BoxParams): Resolved {
-  const { W, D, H } = rectDims(p, p.floor + Math.min(p.lidTop, p.lidHeight));
+  // Inside sizes are usable space. An inset plug lid is narrower than the box all the way up (its lip
+  // hangs inside the walls), so the full-width space ends where the lip starts.
+  const lt = Math.min(p.lidTop, p.lidHeight);
+  const aboveInside = p.lidStyle === 'plug' ? p.lipHeight + Math.max(p.lidHeight, lt) : lt;
+  const { W, D, H } = rectDims(p, p.floor + aboveInside);
   const r = clampRadius(p.radius, W, D);
   const L = lidLayout(p, H);
   const capGrow = L.style === 'cap' ? 2 * (p.tolerance + p.wall) : 0;
-  const plugIntrusion = L.style === 'plug' ? p.tolerance + p.lipThickness : 0;
   return {
     outer: [W + capGrow, D + capGrow, H],
-    inner: [W - 2 * p.wall, D - 2 * p.wall, H - p.floor - L.lt],
+    inner: [W - 2 * p.wall, D - 2 * p.wall, L.style === 'plug' ? L.Hb - L.lipH - p.floor : H - p.floor - L.lt],
     r,
     W,
     D,
     H,
     minSpan: Math.min(W, D),
+    clearH: H - p.floor - L.lt,
     ...L,
-    plugIntrusion,
   };
 }
 
@@ -159,9 +162,23 @@ export function lidWarnings(p: BoxParams, R: Resolved): Warning[] {
     w.push({ level: 'error', text: `The cap would reach below the bottom of the box. Make the lid height at most ${fmt(Math.floor(H * 2) / 2)} mm.` });
     return w;
   }
+  if (style === 'cap') {
+    // The cap's skirt has to come down over the top of the box (which stops 0.3 mm under the cap top).
+    const grip = Hl - lt - 0.3;
+    if (grip < 1) {
+      w.push({ level: 'error', text: `A cap this short would only rest on the box. Make the lid at least ${fmt(Math.ceil((lt + 2.3) * 2) / 2)} mm tall so it slips over the box.` });
+      return w;
+    }
+    if (grip < 2) w.push({ level: 'warn', text: `The cap only overlaps the box by ${fmt(grip)} mm and will come off easily. Make the lid taller.` });
+  }
   if (style === 'rabbet') {
     if (lipH < 1) {
       w.push({ level: 'error', text: `A flush lid this short cannot cover the box's neck. Make the lid at least ${fmt(Math.ceil((lt + 1.3) * 2) / 2)} mm tall, or choose another lid style.` });
+      return w;
+    }
+    // The wall is split into the box's neck, the clearance and the lid's skirt; each needs a printed line.
+    if (skirt < 0.4 || neck < 0.4) {
+      w.push({ level: 'error', text: `The walls are too thin for a flush lid with ${fmt(p.tolerance)} mm of clearance. Use walls of at least ${fmt(0.8 + p.tolerance)} mm, less clearance, or another lid style.` });
       return w;
     }
     if (skirt < 0.8 || neck < 0.8)
@@ -222,21 +239,28 @@ export const lidded: BoxType = {
     const Hb = R.Hb as number, Hl = R.Hl as number, lt = R.lt as number;
     const style = R.style as LidStyle;
     const faces: FaceDef[] = [];
+    // Lithophanes may reach inward only where nothing mates behind the wall: not where a plug lip sits
+    // inside the box walls, nor where a cap or flush lid's skirt wraps the box.
+    const open = cavityRoom(R);
     if (style === 'cap') {
       const g = p.tolerance + p.wall;
-      faces.push(...wallFaces('base', W, D, 0, Math.max(1, H - Hl - 0.6), r, p.wall));
+      faces.push(...withRoom(wallFaces('base', W, D, 0, Math.max(1, H - Hl - 0.6), r, p.wall), open));
       faces.push(topFace('lid-top', 'Lid top', 'lid', W + 2 * g, D + 2 * g, r + g, H, lt, true));
       if (Hl - lt >= 5) faces.push(...wallFaces('lid', W + 2 * g, D + 2 * g, H - Hl, H, r + g, R.skirt as number, 'lid-', 'Lid'));
     } else {
       // Keep graphics off the snap grooves cut into the inside of the walls.
-      for (const f of wallFaces('base', W, D, 0, Hb, r, p.wall)) {
+      for (const f of wallFaces('base', W, D, 0, Hb, r, p.wall, '', '', undefined)) {
         const notch = snapNotch(p, R, f.width);
-        faces.push(notch ? { ...f, outline: topNotchOutline(f.width, f.height, { kind: 'rect', ...notch }) } : f);
+        const face = notch ? { ...f, outline: topNotchOutline(f.width, f.height, { kind: 'rect', ...notch }) } : f;
+        faces.push(style === 'plug' ? face : { ...face, innerRoom: open });
       }
       faces.push(topFace('lid-top', 'Lid top', 'lid', W, D, r, H, lt, true));
-      if (Hl - lt >= 5) faces.push(...wallFaces('lid', W, D, Hb, H, r, R.skirt as number, 'lid-', 'Lid'));
+      if (Hl - lt >= 5 && (R.skirt as number) >= 0.4) {
+        const lidWalls = wallFaces('lid', W, D, Hb, H, r, R.skirt as number, 'lid-', 'Lid');
+        faces.push(...(style === 'plug' ? withRoom(lidWalls, open) : lidWalls));
+      }
     }
-    faces.push(bottomFace('base', W, D, r, p.floor));
+    faces.push({ ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R) });
     return faces;
   },
   parts(_p, R) {

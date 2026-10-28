@@ -11,6 +11,7 @@ import { box, prism, releaseAll, rrect, transformed } from '../src/geometry/kern
 import { placeGraphic } from '../src/graphics/shape2d';
 import { builtinShape, patternShape } from '../src/graphics/shapes';
 import { customFontName, loadFont, registerCustomFont, registerSavedFonts } from '../src/graphics/text';
+import { sourceKey } from '../src/graphics/resolve';
 import { evalExpr } from '../src/ui/controls';
 import type { BoxParams, FaceDef, Graphic, Vec2 } from '../src/core/types';
 import { loadKernel } from './setup-kernel';
@@ -491,5 +492,116 @@ describe('review round 3', () => {
     expect(p.color).toMatch(/^#[0-9a-f]{6}$/i);
     expect(p.graphics[0].color).toMatch(/^#[0-9a-f]{6}$/i);
     expect(p.graphics[0].mode).toBe('deboss');
+  });
+});
+
+describe('review round 4', () => {
+  const star = () => builtinShape('star', 5, 0.45, 0);
+  const gfx = (over: Partial<Graphic>): Graphic => ({
+    id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'star', sides: 5, ratio: 0.45, corner: 0 }, x: 0, y: 0, w: 20, h: 20,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'deboss', depth: 0.8, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+  });
+  /** A lithophane graphic with a dark-to-light ramp, as the build controller would place it. */
+  const litho = (faceId: string, w: number, h: number, y = 0, max = 3) => {
+    const pg = placeGraphic(gfx({ faceId, mode: 'lithophane', w, h, y, lithoMax: max }), builtinShape('rect', 4, 0.5, 0));
+    const pw = 24, ph = 12;
+    pg.litho = { pixels: Uint8Array.from({ length: pw * ph }, (_, i) => (i % pw) * 10), pw, ph, min: 0.8, max };
+    return pg;
+  };
+  const partsOverlap = (solids: Record<string, Manifold>) => {
+    const ids = Object.keys(solids);
+    let worst = 0;
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) worst = Math.max(worst, overlap(solids[ids[i]], solids[ids[j]]));
+    return worst;
+  };
+
+  const cases: [keyof typeof BOX_TYPES, Partial<BoxParams>, string][] = [
+    ['lidded', { lidStyle: 'plug' }, 'front'],
+    ['lidded', { lidStyle: 'cap' }, 'lid-front'],
+    ['lidded', { lidStyle: 'rabbet', wall: 3 }, 'lid-front'],
+    ['hinged', {}, 'front'],
+    ['polygon', { polyLid: true, lidStyle: 'plug' }, 'side2'],
+    ['drawers', {}, 'left'],
+  ];
+  for (const [type, over, faceId] of cases) {
+    it(`a lithophane on ${type} ${faceId} ${JSON.stringify(over)} stays out of the mating parts`, () => {
+      const s = setup(type, over);
+      const faces = s.faces();
+      const face = faces.find((f) => f.id === faceId)!;
+      expect(face, faceId).toBeTruthy();
+      const out = applyGraphics(s.build(), faces, [litho(faceId, Math.min(40, face.width - 4), Math.min(24, face.height - 2), face.height / 2 - Math.min(24, face.height - 2) / 2 - 1)]);
+      expect(partsOverlap(out.solids)).toBeLessThan(0.01);
+    });
+  }
+
+  it('an open tray still lets a lithophane reach past its wall', () => {
+    const s = setup('tray');
+    const solids = s.build();
+    const out = applyGraphics(solids, s.faces(), [litho('front', 40, 20, 0, 4)]);
+    // Material behind the 2 mm wall inside the window means the relief kept its full 4 mm.
+    const inside = out.solids.base.intersect(box(-10, 10, -s.R.outer[1] / 2 + 2.2, -s.R.outer[1] / 2 + 3.9, 20, 28)).volume();
+    expect(inside).toBeGreaterThan(1);
+  });
+
+  for (const [type, over] of [['lidded', { lidStyle: 'plug' }], ['hinged', {}], ['polygon', { polyLid: true, lidStyle: 'plug', sides: 4, polyRound: 0 }]] as const) {
+    it(`inside size of ${type} ${JSON.stringify(over)} is usable space`, () => {
+      const s = setup(type, { ...over, dimsMode: 'inner', width: 80, depth: 60, height: 40, diameter: 60, radius: 0 });
+      const [iw, id, ih] = s.R.inner;
+      expect(ih).toBeGreaterThanOrEqual(40 - 1e-6);
+      const parts = s.build();
+      // For the square polygon the inside is the square inscribed in the flats.
+      const hw = type === 'polygon' ? iw / 2 / Math.SQRT2 : iw / 2, hd = type === 'polygon' ? id / 2 / Math.SQRT2 : id / 2;
+      const block = box(-hw + 0.05, hw - 0.05, -hd + 0.05, hd - 0.05, s.p.floor + 0.01, s.p.floor + ih - 0.05);
+      for (const [k, m] of Object.entries(parts)) expect(overlap(block, m), k).toBeLessThan(0.01);
+    });
+  }
+
+  it('a slip-over cap must reach down over the box', () => {
+    expect(setup('lidded', { lidStyle: 'cap', lidHeight: 2 }).errors.length).toBeGreaterThan(0);
+    expect(setup('lidded', { lidStyle: 'cap', lidHeight: 3 }).errors.length).toBeGreaterThan(0);
+    const short = setup('lidded', { lidStyle: 'cap', lidHeight: 4 });
+    expect(short.errors).toEqual([]);
+    expect(short.warnings.some((w) => /come off easily/.test(w.text))).toBe(true);
+    expect(setup('polygon', { polyLid: true, lidStyle: 'cap', lidHeight: 1 }).errors.length).toBeGreaterThan(0);
+  });
+
+  it('a flush lid on walls too thin for its clearance is refused', () => {
+    expect(setup('lidded', { lidStyle: 'rabbet', wall: 0.8, tolerance: 0.6 }).errors.length).toBeGreaterThan(0);
+    expect(setup('lidded', { lidStyle: 'rabbet', wall: 1.2, tolerance: 1 }).errors.length).toBeGreaterThan(0);
+    expect(setup('lidded', { lidStyle: 'rabbet', wall: 2 }).errors).toEqual([]);
+  });
+
+  it('inlay fills never plug through-cuts, overlap raised graphics, or overlap each other', () => {
+    const s = setup('lidded');
+    const faces = s.faces();
+    const solids = s.build();
+    const inlay = (color: string, x = 0) => placeGraphic(gfx({ mode: 'inlay', depth: 0.6, color, x, w: 30, h: 20, source: { kind: 'shape', shape: 'rect', sides: 4, ratio: 0.5, corner: 0 } }), builtinShape('rect', 4, 0.5, 0));
+    const hole = placeGraphic(gfx({ mode: 'cut', w: 10, h: 10, source: { kind: 'shape', shape: 'circle', sides: 4, ratio: 0.5, corner: 0 } }), builtinShape('circle'));
+    const raised = placeGraphic(gfx({ mode: 'emboss', depth: 1, x: 8 }), star());
+    const whole = Object.values(applyGraphics(solids, faces, [inlay('#ff0000')]).inlays)[0].solid.volume();
+    for (const order of [[inlay('#ff0000'), hole], [hole, inlay('#ff0000')]]) {
+      const out = applyGraphics(solids, faces, order);
+      const fill = Object.values(out.inlays)[0].solid;
+      expect(overlap(fill, out.solids.base)).toBeLessThan(0.01);
+      // The fill lost exactly the through-hole: a 10 mm circle, 0.6 mm deep.
+      expect(whole - fill.volume()).toBeCloseTo(Math.PI * 25 * 0.6, 0);
+    }
+    const over = applyGraphics(solids, faces, [inlay('#ff0000'), raised]);
+    expect(overlap(Object.values(over.inlays)[0].solid, over.solids.base)).toBeLessThan(0.01);
+    const two = applyGraphics(solids, faces, [inlay('#ff0000'), inlay('#00ff00', 10)]);
+    const [a, b] = Object.values(two.inlays).map((x) => x.solid);
+    expect(overlap(a, b)).toBeLessThan(0.01);
+    for (const inl of Object.values(two.inlays)) for (const piece of inl.solid.decompose()) expect(piece.volume()).toBeGreaterThanOrEqual(0.02);
+  });
+
+  it('outline cache keys and font ids cover the whole file', () => {
+    const svg = (n: number) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${'<path d="M0 0L10 10"/>'.repeat(400)}<path d="M5 5L${n} 9Z"/></svg>`;
+    expect(sourceKey({ kind: 'svg', name: 'a', svg: svg(90) })).not.toBe(sourceKey({ kind: 'svg', name: 'a', svg: svg(30) }));
+  });
+
+  it('warns when a graphic sits on a face this box does not have', () => {
+    const s = setup('tray');
+    const out = applyGraphics(s.build(), s.faces(), [placeGraphic(gfx({ faceId: 'lid-top' }), star())]);
+    expect(out.warnings.some((w) => /face this box does not have/.test(w.text))).toBe(true);
   });
 });

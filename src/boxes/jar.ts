@@ -1,7 +1,7 @@
 import { circlePoints, IDENTITY, rotX } from '../core/math';
 import { circle, coneZ, cylZ, helicalRidge, K, prism, unionAll } from '../geometry/kernel';
 import type { BoxParams, FaceDef, Resolved } from '../core/types';
-import { F, fmt, planeFace, type BoxType } from './common';
+import { cavityRoom, F, fmt, planeFace, type BoxType } from './common';
 
 /**
  * Thread layout shared by the neck and the cap. With 45-degree flanks the neck ridge and the cap
@@ -105,6 +105,8 @@ export const jar: BoxType = {
         height: bodyTop - 0.4,
         outline: [],
         thickness: p.wall,
+        // Nothing mates inside the jar body: a lithophane may reach into the jar.
+        innerRoom: cavityRoom(R),
       },
       planeFace('lid-top', 'Cap top', 'cap', [0, 0, H], [1, 0, 0], [0, 1, 0], [0, 0, 1], 2 * Rr, 2 * Rr, p.lidTop, {
         onBed: true,

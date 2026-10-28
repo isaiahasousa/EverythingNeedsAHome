@@ -3,7 +3,7 @@
 import type { CrossSection, Manifold } from 'manifold-3d';
 import { frameMatrix } from '../core/math';
 import type { FaceDef, PlacedGraphic, Vec2, Warning } from '../core/types';
-import { K, poly, transformed, unionAll } from './kernel';
+import { emptySolid, K, poly, transformed, unionAll } from './kernel';
 
 const OVERLAP = 0.3;
 
@@ -105,9 +105,19 @@ export function applyGraphics(
   const faceById = new Map(faces.map((f) => [f.id, f]));
   /** Face labels with graphics, per part, for the loose-piece warning. */
   const touched = new Map<string, Set<string>>();
+  /** Cut-through cutters per part: inlay fills never plug them. */
+  const cuts = new Map<string, Manifold[]>();
+  /** A later engraving or cut also takes the colour out of earlier inlays on that part. */
+  const clearFills = (partId: string, cutter: Manifold) => {
+    for (const inl of Object.values(out.inlays)) if (inl.partId === partId) inl.solid = inl.solid.subtract(cutter);
+  };
+  let orphans = 0;
   for (const g of graphics) {
     const face = faceById.get(g.faceId);
-    if (!face) continue;
+    if (!face) {
+      orphans++;
+      continue;
+    }
     const base = out.solids[face.partId];
     if (!base) continue;
     const label = `“${face.label}”`;
@@ -124,7 +134,21 @@ export function applyGraphics(
       }
       const outline = poly(face.outline as Vec2[]);
       if (g.mode === 'lithophane') {
-        const relief = lithophane(g);
+        // The relief may reach inward only as far as the wall, plus any free space behind it: past that
+        // it would hit a lid lip, a mating part or a drawer. The brightness range is squeezed to fit.
+        const room = face.thickness + (face.innerRoom ?? 0);
+        const L = g.litho!;
+        let fitted = g;
+        if (L.max > room + 1e-6) {
+          const max = room;
+          fitted = { ...g, litho: { ...L, max, min: Math.max(0.2, Math.min(L.min, max - 0.2)) } };
+          out.warnings.push({
+            scope: 'graphics',
+            level: 'info',
+            text: `The lithophane on ${label} is limited to ${mm(max)} mm thick so it does not get in the way of the parts behind it. Thicker walls give it more contrast.`,
+          });
+        }
+        const relief = lithophane(fitted);
         if (!relief) continue;
         let window = rectCS(g.frame.w, g.frame.h, g.frame.x, g.frame.y, g.frame.rotation);
         if (outline) window = window.intersect(outline);
@@ -133,11 +157,12 @@ export function applyGraphics(
           continue;
         }
         const hole = placeOnFace(slab(window, -(face.thickness + OVERLAP), OVERLAP), face);
-        const clipped = relief.intersect(slab(window, -(g.litho!.max + 2), 1));
+        const clipped = relief.intersect(slab(window, -(fitted.litho!.max + 2), 1));
         const placed = placeOnFace(clipped, face).asOriginal();
         out.colorIds.set(placed.originalID(), g.color);
         out.solids[face.partId] = unionAll([base.subtract(hole), placed]);
-        if (g.litho!.max > face.thickness + 1.5)
+        clearFills(face.partId, hole);
+        if (fitted.litho!.max > face.thickness + 1.5)
           out.warnings.push({ scope: 'graphics', level: 'info', text: `The lithophane on ${label} is thicker than the wall and will stand proud on the inside.` });
         continue;
       }
@@ -167,6 +192,8 @@ export function applyGraphics(
         out.solids[face.partId] = base.subtract(cutter);
         if (depth >= face.thickness)
           out.warnings.push({ scope: 'graphics', level: 'warn', text: `Engraving depth ${depth} mm on ${label} reaches through the ${face.thickness} mm wall.` });
+        // A later graphic paints over earlier ones: its pocket takes the colour out of earlier inlays.
+        clearFills(face.partId, cutter);
         if (g.mode === 'inlay') {
           const key = `${face.partId}::${g.color.toLowerCase()}`;
           const fill = placeOnFace(slab(cs, -d, 0), face);
@@ -177,13 +204,39 @@ export function applyGraphics(
         const cutter = placeOnFace(slab(cs, -(face.thickness + OVERLAP), OVERLAP), face).asOriginal();
         out.colorIds.set(cutter.originalID(), g.color);
         out.solids[face.partId] = base.subtract(cutter);
+        if (!cuts.has(face.partId)) cuts.set(face.partId, []);
+        cuts.get(face.partId)!.push(cutter);
       }
     } catch (err) {
       out.warnings.push({ scope: 'graphics', level: 'warn', text: `A graphic on ${label} could not be applied (${(err as Error).message}).` });
     }
   }
   for (const [partId, labels] of touched) tidyPart(out, partId, solids[partId], [...labels]);
+  // Inlay fills only fill what is left of their pockets: never a through-cut, never the body.
+  for (const inl of Object.values(out.inlays)) {
+    let fill = inl.solid.subtract(out.solids[inl.partId]);
+    const through = cuts.get(inl.partId);
+    if (through?.length) fill = fill.subtract(unionAll(through));
+    inl.solid = dropSlivers(fill);
+  }
+  if (orphans)
+    out.warnings.push({
+      scope: 'graphics',
+      level: 'warn',
+      text: `${orphans === 1 ? 'A graphic is' : `${orphans} graphics are`} on a face this box does not have with these settings, so ${orphans === 1 ? 'it is' : 'they are'} left out. Move ${orphans === 1 ? 'it' : 'them'} to another face in the Graphics step.`,
+    });
   return out;
+}
+
+/** Remove boolean slivers from an inlay fill: tiny, or thinner on average than 0.1 mm. Real pieces stay. */
+function dropSlivers(m: Manifold): Manifold {
+  const pieces = m.decompose();
+  if (pieces.length === 0) return m;
+  const kept = pieces.filter((q) => {
+    const v = q.volume();
+    return v >= 0.02 && (2 * v) / Math.max(1e-9, q.surfaceArea()) >= 0.05;
+  });
+  return kept.length === pieces.length ? m : kept.length ? K().Manifold.compose(kept) : emptySolid();
 }
 
 const mm = (v: number) => (Math.round(v * 100) / 100).toString();

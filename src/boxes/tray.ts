@@ -1,7 +1,7 @@
 import { IDENTITY } from '../core/math';
 import { box, prism, rrect, unionAll } from '../geometry/kernel';
 import type { BoxParams, Resolved } from '../core/types';
-import { bottomFace, clampRadius, commonWarnings, F, rectDims, wallFaces, type BoxType } from './common';
+import { bottomFace, cavityRoom, clampRadius, commonWarnings, F, floorRoom, rectDims, wallFaces, withRoom, type BoxType } from './common';
 
 function resolve(p: BoxParams): Resolved {
   const { W, D, H } = rectDims(p, p.floor);
@@ -39,7 +39,8 @@ export const tray: BoxType = {
   faces(p, R) {
     const [W, D, H] = R.outer;
     const r = R.r as number;
-    return [...wallFaces('base', W, D, 0, H, r, p.wall), bottomFace('base', W, D, r, p.floor)];
+    // An open tray has nothing behind its walls or above its floor: lithophanes may reach inward.
+    return [...withRoom(wallFaces('base', W, D, 0, H, r, p.wall), cavityRoom(R)), { ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R) }];
   },
   parts() {
     return [{ id: 'base', name: 'Tray', print: IDENTITY, explode: [0, 0, 0], tip: 'Print upright. No supports needed.' }];

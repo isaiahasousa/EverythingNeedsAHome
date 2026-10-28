@@ -70,11 +70,17 @@ export function ExportStep() {
     return toSTL(items, part.name);
   };
 
+  const buildNotes = useMemo(() => {
+    const seen = new Set<string>();
+    return (result?.warnings ?? []).filter((w) => w.level !== 'info' && !seen.has(w.text) && !!seen.add(w.text));
+  }, [result]);
   const notes = [
     ...(status === 'building' || status === 'loading' ? [{ level: 'info' as const, text: 'Updating the model to match your latest changes. Downloads switch back on when it is done.' }] : []),
     ...(status === 'error' ? [{ level: 'error' as const, text: 'The model could not be built with these settings, so there is nothing to download. Change the settings or undo the last change.' }] : []),
     ...(layout?.overflow.length ? [{ level: 'warn' as const, text: `Too big for this bed: ${layout.overflow.join(', ')}. Choose a larger printer or print parts separately.` }] : []),
     ...(layout?.tooTall.length ? [{ level: 'warn' as const, text: `Taller than this printer allows: ${layout.tooTall.join(', ')}.` }] : []),
+    // Everything the last build had to say (settings, graphics left out, parts in pieces), once each.
+    ...(status === 'ready' ? buildNotes : []),
   ];
 
   return (

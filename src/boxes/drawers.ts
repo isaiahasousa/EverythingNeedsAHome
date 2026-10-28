@@ -109,7 +109,13 @@ export const drawers: BoxType = {
     for (let i = 0; i < n; i++) {
       const k = n - 1 - i; // drawer 1 is the top one
       const z0 = compZ(p, ch, k);
-      faces.push(planeFace(`drawer${i + 1}-front`, `Drawer ${i + 1} front`, `drawer${i + 1}`, [0, -D / 2, z0 + dh / 2], [1, 0, 0], [0, 0, 1], [0, -1, 0], dw, dh, p.drawerWall, { outline }));
+      // Behind a drawer front is the drawer's own inside, so a lithophane may reach into it (not past it).
+      faces.push(
+        planeFace(`drawer${i + 1}-front`, `Drawer ${i + 1} front`, `drawer${i + 1}`, [0, -D / 2, z0 + dh / 2], [1, 0, 0], [0, 0, 1], [0, -1, 0], dw, dh, p.drawerWall, {
+          outline,
+          innerRoom: Math.max(0, R.inner[1] - 0.5),
+        }),
+      );
     }
     return faces;
   },

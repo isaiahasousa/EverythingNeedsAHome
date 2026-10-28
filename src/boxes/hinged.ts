@@ -2,7 +2,7 @@ import type { Manifold } from 'manifold-3d';
 import { clamp, IDENTITY, rotX } from '../core/math';
 import { box, cylX, cylY, K, loftRoundedRect, prism, rrect, unionAll } from '../geometry/kernel';
 import type { BoxParams, Resolved } from '../core/types';
-import { bottomFace, clampRadius, commonWarnings, F, fmt, planeFace, rectDims, topFace, topNotchOutline, wallFaces, type BoxType } from './common';
+import { bottomFace, cavityRoom, clampRadius, commonWarnings, F, floorRoom, fmt, planeFace, rectDims, topFace, topNotchOutline, wallFaces, withRoom, type BoxType } from './common';
 
 /** Angle (degrees from horizontal) of the underside of a knuckle gusset whose strip runs `h` mm from the axis. */
 function gussetAngle(rk: number, e: number, h: number) {
@@ -14,7 +14,9 @@ const notchRadius = (W: number, Hb: number) => Math.min(10, W / 6, Hb * 0.6);
 
 function resolve(p: BoxParams): Resolved {
   const lt = Math.min(p.lidTop, p.lidHeight);
-  const { W, D, H } = rectDims(p, p.floor + lt);
+  // Inside sizes are usable space. With the alignment lip the lid is narrower than the box all the way
+  // up (the lip hangs inside the walls), so the full-width space ends where the lip starts.
+  const { W, D, H } = rectDims(p, p.floor + (p.alignLip ? Math.min(p.lipHeight, 6) + Math.max(p.lidHeight, lt) : lt));
   const r = clampRadius(p.radius, W, D);
   const Hl = Math.max(p.lidHeight, lt);
   const Hb = H - Hl;
@@ -32,7 +34,7 @@ function resolve(p: BoxParams): Resolved {
   const minHb = Math.max(p.floor + 2, rk + 0.5);
   return {
     outer: [W, D + e + rk, H],
-    inner: [W - 2 * p.wall, D - 2 * p.wall, H - p.floor - lt],
+    inner: [W - 2 * p.wall, D - 2 * p.wall, useLip ? Hb - lipH - p.floor : H - p.floor - lt],
     r,
     W,
     D,
@@ -48,6 +50,7 @@ function resolve(p: BoxParams): Resolved {
     lipH,
     useLip,
     minHb,
+    clearH: H - p.floor - lt,
     lidWall: useLip ? p.wall + p.tolerance + p.lipThickness : p.wall,
     axisY: D / 2 + e,
   };
@@ -88,18 +91,22 @@ export const hinged: BoxType = {
   faces(p, R) {
     const W = R.W as number, D = R.D as number, H = R.H as number;
     const r = R.r as number, Hb = R.Hb as number, Hl = R.Hl as number, lt = R.lt as number, rk = R.rk as number;
+    // Lithophanes may reach inward past the box walls only when no alignment lip comes down inside them.
+    const open = cavityRoom(R);
+    const baseRoom = R.useLip ? 0 : open;
     const front = planeFace('front', 'Front', 'base', [0, -D / 2, Hb / 2], [1, 0, 0], [0, 0, 1], [0, -1, 0], W - 2 * r, Hb, p.wall, {
       outline: p.frontNotch ? topNotchOutline(W - 2 * r, Hb, { kind: 'arc', r: notchRadius(W, Hb) }) : undefined,
+      innerRoom: baseRoom,
     });
     const faces = [
       front,
-      ...wallFaces('base', W, D, 0, Hb, r, p.wall, '', '', ['left', 'right']),
+      ...withRoom(wallFaces('base', W, D, 0, Hb, r, p.wall, '', '', ['left', 'right']), baseRoom),
       topFace('lid-top', 'Lid top', 'lid', W, D, r, H, lt, true),
     ];
     const backTop = Hb - 3 * rk - 1;
-    if (backTop >= 6) faces.push(...wallFaces('base', W, D, 0, backTop, r, p.wall, '', '', ['back']));
-    if (Hl - lt >= 5) faces.push(...wallFaces('lid', W, D, Hb, H, r, R.lidWall as number, 'lid-', 'Lid', ['front', 'left', 'right']));
-    faces.push(bottomFace('base', W, D, r, p.floor));
+    if (backTop >= 6) faces.push(...withRoom(wallFaces('base', W, D, 0, backTop, r, p.wall, '', '', ['back']), baseRoom));
+    if (Hl - lt >= 5) faces.push(...withRoom(wallFaces('lid', W, D, Hb, H, r, R.lidWall as number, 'lid-', 'Lid', ['front', 'left', 'right']), open));
+    faces.push({ ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R) });
     return faces;
   },
   parts(p, R) {

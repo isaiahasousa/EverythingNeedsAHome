@@ -65,7 +65,20 @@ interface FaceOpts {
   outline?: Vec2[];
   solid?: boolean;
   raiseLimit?: FaceDef['raiseLimit'];
+  innerRoom?: number;
 }
+
+/** Free space behind faces with nothing mating behind them: plenty for any lithophane. */
+export const OPEN_BEHIND = 50;
+
+/** Room behind a wall facing an open cavity: up to half the narrowest inside dimension. */
+export const cavityRoom = (R: Resolved) => Math.max(0, Math.min(OPEN_BEHIND, R.inner[0] / 2 - 0.5, R.inner[1] / 2 - 0.5));
+
+/** Room above a floor: the usable inside height. */
+export const floorRoom = (R: Resolved) => Math.max(0, Math.min(OPEN_BEHIND, R.inner[2] - 0.5));
+
+/** The same faces with `innerRoom` set (how far a lithophane may reach inward past the wall). */
+export const withRoom = (faces: FaceDef[], innerRoom: number): FaceDef[] => faces.map((f) => ({ ...f, innerRoom }));
 
 export function planeFace(
   id: string,
@@ -96,6 +109,7 @@ export function planeFace(
     onBed: opts.onBed,
     solid: opts.solid,
     raiseLimit: opts.raiseLimit,
+    innerRoom: opts.innerRoom,
   };
 }
 
@@ -153,8 +167,10 @@ export function bottomFace(partId: string, W: number, D: number, r: number, t: n
 export function commonWarnings(p: BoxParams, r: Resolved): Warning[] {
   const w: Warning[] = [];
   if (p.wall < 1.2) w.push({ level: 'warn', text: `Walls of ${p.wall} mm are fragile. 1.2 mm or more prints reliably with a 0.4 mm nozzle.` });
-  if (r.inner.some((v) => v <= 0)) w.push({ level: 'error', text: 'Walls and floor are thicker than the box. Increase the size or reduce the thickness.' });
-  else if (r.inner.some((v) => v < 2)) w.push({ level: 'error', text: 'The inside would be less than 2 mm across. Increase the size or reduce the wall and floor thickness.' });
+  // Whether there is a cavity at all: under a lid that hangs inside (`clearH`), the full height counts.
+  const dims = [r.inner[0], r.inner[1], typeof r.clearH === 'number' ? r.clearH : r.inner[2]];
+  if (dims.some((v) => v <= 0)) w.push({ level: 'error', text: 'Walls and floor are thicker than the box. Increase the size or reduce the thickness.' });
+  else if (dims.some((v) => v < 2)) w.push({ level: 'error', text: 'The inside would be less than 2 mm across. Increase the size or reduce the wall and floor thickness.' });
   return w;
 }
 
