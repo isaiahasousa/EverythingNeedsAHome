@@ -45,6 +45,8 @@ function placeOnFace(local: Manifold, face: FaceDef): Manifold {
 }
 
 function slab(cs: CrossSection, w0: number, w1: number): Manifold {
+  // An empty outline extrudes to an invalid solid that would empty any boolean it touches.
+  if (cs.isEmpty() || !(w1 > w0)) return emptySolid();
   return cs.extrude(w1 - w0).translate([0, 0, w0]);
 }
 
@@ -118,9 +120,33 @@ export function applyGraphics(
   const touched = new Map<string, Set<string>>();
   /** Cut-through cutters per part: inlay fills never plug them. */
   const cuts = new Map<string, Manifold[]>();
+  /** Height of the tallest raised graphic so far on each face: later cutters must clear it. */
+  const raisedOn = new Map<string, number>();
+  /** Each part's convex hull: lithophanes never reach outside the part. */
+  const hulls = new Map<string, Manifold>();
+  const hullOf = (partId: string) => {
+    if (!hulls.has(partId)) hulls.set(partId, solids[partId].hull());
+    return hulls.get(partId)!;
+  };
   /** A later engraving or cut also takes the colour out of earlier inlays on that part. */
   const clearFills = (partId: string, cutter: Manifold) => {
     for (const inl of Object.values(out.inlays)) if (inl.partId === partId) inl.solid = inl.solid.subtract(cutter);
+  };
+  /**
+   * Keep a step's result only if it is a valid, non-empty solid that lost no more than the cutter could
+   * remove. Anything else (a degenerate outline, a numerical failure) leaves the part as it was.
+   */
+  const commit = (partId: string, before: Manifold, next: Manifold, maxLoss: number, label: string) => {
+    const ok = next.status() === 'NoError' && !next.isEmpty() && before.volume() - next.volume() <= maxLoss + 1;
+    if (ok) out.solids[partId] = next;
+    else out.warnings.push({ scope: 'graphics', level: 'warn', text: `A graphic on ${label} could not be applied with these settings, so it was left out.` });
+    return ok;
+  };
+  /** Whether a face prints sideways (not facing up, not on the bed): flat undersides there are overhangs. */
+  const sideways = (face: FaceDef) => {
+    const n: Vec3 = face.kind === 'plane' ? face.n : [0, -1, 0];
+    const up = prints[face.partId] ? applyMatDir(prints[face.partId], n)[2] : n[2];
+    return !face.onBed && up < 0.7;
   };
   let orphans = 0;
   for (const g of graphics) {
@@ -134,6 +160,8 @@ export function applyGraphics(
     const label = `“${face.label}”`;
     if (!touched.has(face.partId)) touched.set(face.partId, new Set());
     touched.get(face.partId)!.add(label);
+    // Cutters start above any raised graphic already on this face, so they go through it.
+    const top = OVERLAP + (raisedOn.get(face.id) ?? 0);
     try {
       if (face.solid && (g.mode === 'cut' || g.mode === 'lithophane')) {
         out.warnings.push({ scope: 'graphics', level: 'warn', text: `${label} is solid underneath, so a graphic there cannot cut through or be a lithophane. Engrave it instead.` });
@@ -162,26 +190,34 @@ export function applyGraphics(
         }
         const relief = lithophane(fitted);
         if (!relief) continue;
-        let window = rectCS(g.frame.w, g.frame.h, g.frame.x, g.frame.y, g.frame.rotation);
-        if (outline) window = window.intersect(outline);
-        if (window.isEmpty()) {
+        const window = rectCS(g.frame.w, g.frame.h, g.frame.x, g.frame.y, g.frame.rotation).intersect(outline);
+        // The hole is a hair smaller than the relief, so the two overlap and always fuse into one part.
+        const holeWindow = window.offset(-0.02, 'Miter');
+        if (window.area() < 0.05 || holeWindow.isEmpty()) {
           out.warnings.push({ scope: 'graphics', level: 'warn', text: `A lithophane on ${label} is outside the face.` });
           continue;
         }
-        // The hole is a hair smaller than the relief, so the two overlap and always fuse into one part.
-        const hole = placeOnFace(slab(window.offset(-0.02, 'Miter'), -(face.thickness + OVERLAP), OVERLAP), face);
+        const hole = placeOnFace(slab(holeWindow, -(face.thickness + OVERLAP), top), face);
         const clipped = relief.intersect(slab(window, -(fitted.litho!.max + 2), 1));
-        const placed = placeOnFace(clipped, face).asOriginal();
+        // Never outside the part (on a triangular box the relief would poke through the next side).
+        const placed = placeOnFace(clipped, face).intersect(hullOf(face.partId)).asOriginal();
         out.colorIds.set(placed.originalID(), g.color);
-        out.solids[face.partId] = unionAll([base.subtract(hole), placed]);
+        if (!commit(face.partId, base, unionAll([base.subtract(hole), placed]), hole.volume(), label)) continue;
         clearFills(face.partId, hole);
-        if (fitted.litho!.max > face.thickness + 1.5)
+        const inward = fitted.litho!.max - face.thickness;
+        if (inward > 2 + 1e-6 && sideways(face))
+          out.warnings.push({
+            scope: 'graphics',
+            level: 'warn',
+            text: `The lithophane on ${label} reaches ${mm(inward)} mm past the inside of the wall. Printed on its side, that ledge needs supports. Set its thickest part to at most ${mm(face.thickness + 2)} mm, or use thicker walls.`,
+          });
+        else if (inward > 1.5)
           out.warnings.push({ scope: 'graphics', level: 'info', text: `The lithophane on ${label} is thicker than the wall and will stand proud on the inside.` });
         continue;
       }
       let cs = layersToCS(g);
       if (!cs) continue;
-      if (outline) cs = cs.intersect(outline);
+      cs = cs.intersect(outline);
       if (cs.isEmpty() || cs.area() < 0.01) {
         out.warnings.push({ scope: 'graphics', level: 'warn', text: `A graphic on ${label} lies outside the face and was skipped.` });
         continue;
@@ -190,12 +226,11 @@ export function applyGraphics(
       if (g.mode === 'emboss') {
         const solid = placeOnFace(slab(cs, -OVERLAP, depth), face).asOriginal();
         out.colorIds.set(solid.originalID(), g.color);
-        out.solids[face.partId] = base.add(solid);
+        if (!commit(face.partId, base, base.add(solid), 0, label)) continue;
+        raisedOn.set(face.id, Math.max(raisedOn.get(face.id) ?? 0, depth));
         if (face.onBed) out.warnings.push({ scope: 'graphics', level: 'warn', text: `Raised graphics on ${label} face the print bed. Use Deboss or Inlay there, or print with supports.` });
         // On a face that prints sideways, a raised graphic's underside is a flat overhang as deep as it is tall.
-        const n: Vec3 = face.kind === 'plane' ? face.n : [0, -1, 0];
-        const up = prints[face.partId] ? applyMatDir(prints[face.partId], n)[2] : n[2];
-        if (!face.onBed && up < 0.7 && depth > 2 + 1e-6)
+        if (sideways(face) && depth > 2 + 1e-6)
           out.warnings.push({
             scope: 'graphics',
             level: 'warn',
@@ -209,11 +244,15 @@ export function applyGraphics(
           });
       } else if (g.mode === 'deboss' || g.mode === 'inlay') {
         const d = depth;
-        const cutter = placeOnFace(slab(cs, -d, OVERLAP), face).asOriginal();
+        const cutter = placeOnFace(slab(cs, -d, top), face).asOriginal();
         out.colorIds.set(cutter.originalID(), g.color);
-        out.solids[face.partId] = base.subtract(cutter);
+        if (!commit(face.partId, base, base.subtract(cutter), cutter.volume(), label)) continue;
         if (depth >= face.thickness)
-          out.warnings.push({ scope: 'graphics', level: 'warn', text: `Engraving depth ${depth} mm on ${label} reaches through the ${face.thickness} mm wall.` });
+          out.warnings.push({
+            scope: 'graphics',
+            level: 'warn',
+            text: g.mode === 'inlay' ? `Inlay depth ${depth} mm on ${label} goes through the ${face.thickness} mm wall, so the colour shows inside too.` : `Engraving depth ${depth} mm on ${label} reaches through the ${face.thickness} mm wall.`,
+          });
         // A later graphic paints over earlier ones: its pocket takes the colour out of earlier inlays.
         clearFills(face.partId, cutter);
         if (g.mode === 'inlay') {
@@ -223,9 +262,9 @@ export function applyGraphics(
           out.inlays[key] = { partId: face.partId, color: g.color, solid: prev ? prev.solid.add(fill) : fill };
         }
       } else if (g.mode === 'cut') {
-        const cutter = placeOnFace(slab(cs, -(face.thickness + OVERLAP), OVERLAP), face).asOriginal();
+        const cutter = placeOnFace(slab(cs, -(face.thickness + OVERLAP), top), face).asOriginal();
         out.colorIds.set(cutter.originalID(), g.color);
-        out.solids[face.partId] = base.subtract(cutter);
+        if (!commit(face.partId, base, base.subtract(cutter), cutter.volume(), label)) continue;
         if (!cuts.has(face.partId)) cuts.set(face.partId, []);
         cuts.get(face.partId)!.push(cutter);
       }
@@ -276,9 +315,16 @@ function tidyPart(out: GraphicsOutcome, partId: string, before: Manifold, labels
   if (!after || after === before) return;
   const pieces = after.decompose();
   if (pieces.length <= 1) return;
-  const kept = pieces.filter((m) => m.volume() >= MIN_PIECE);
-  if (kept.length < pieces.length) out.solids[partId] = kept.length ? K().Manifold.compose(kept) : after;
-  if (kept.length > before.decompose().length) {
+  // Keep real pieces and sealed voids (inward-facing shells with negative volume); drop only specks.
+  const kept = pieces.filter((m) => Math.abs(m.volume()) >= MIN_PIECE);
+  const solidCount = kept.filter((m) => m.volume() > 0).length;
+  if (solidCount === 0) {
+    out.solids[partId] = before;
+    out.warnings.push({ scope: 'graphics', level: 'warn', text: `Graphics on ${labels.join(', ')} could not be applied with these settings, so they were left out.` });
+    return;
+  }
+  if (kept.length < pieces.length) out.solids[partId] = K().Manifold.compose(kept);
+  if (solidCount > before.decompose().filter((m) => m.volume() > 0).length) {
     const where = labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
     out.warnings.push({
       scope: 'graphics',

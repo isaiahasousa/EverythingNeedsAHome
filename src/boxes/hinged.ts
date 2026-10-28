@@ -110,7 +110,7 @@ export const hinged: BoxType = {
     const backTop = Hb - 3 * rk - 1;
     if (backTop >= 6) faces.push(...withRoom(wallFaces('base', W, D, 0, backTop, r, p.wall, '', '', ['back']), open));
     if (Hl - lt >= 5) faces.push(...withRoom(wallFaces('lid', W, D, Hb, H, r, R.lidWall as number, 'lid-', 'Lid', ['front', 'left', 'right']), open));
-    faces.push({ ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R) });
+    faces.push({ ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R, p.floor, Hb) });
     return faces;
   },
   parts(p, R) {

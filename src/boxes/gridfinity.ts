@@ -95,8 +95,8 @@ export const gridfinity: BoxType = {
       faces.push(
         planeFace('label', 'Label shelf', 'bin', [0, (front + back) / 2, R.shelfTop as number], [1, 0, 0], [0, 1, 0], [0, 0, 1], W - 2 * tw - 6, back - front, 1.2, {
           solid: true,
-          // A bin stacked on top rests 1.2 mm above the shelf.
-          raiseLimit: p.gfLip ? { max: 1, why: 'a bin stacked on top would sit on them' } : undefined,
+          // A bin stacked on top seats 0.35 mm below the body top, so 0.85 mm above the shelf.
+          raiseLimit: p.gfLip ? { max: 0.8, why: 'a bin stacked on top would sit on them' } : undefined,
         }),
       );
     }
@@ -154,8 +154,9 @@ export const gridfinity: BoxType = {
     }
     bin = bin.subtract(cavity);
     const iw = W - 2 * tw, id = D - 2 * tw, dt = 1.2;
-    // With a label shelf the dividers stop at its top surface so a label strip lies flat.
-    const divTop = R.label ? (R.shelfTop as number) : Hbody;
+    // With a label shelf the dividers stop at its top surface so a label strip lies flat. With the
+    // stacking lip they stop under the feet of a stacked bin, which seat 0.35 mm below the body top.
+    const divTop = R.label ? (R.shelfTop as number) : p.gfLip ? Hbody - 0.5 : Hbody;
     const slabs = [
       ...dividerCentres(iw, Math.round(p.gfDividersX), dt).map((x) => box(x - dt / 2, x + dt / 2, -id / 2 - tw / 2, id / 2 + tw / 2, floorZ - 0.01, divTop)),
       ...rowDividers(p, R).keep.map((y) => box(-iw / 2 - tw / 2, iw / 2 + tw / 2, y - dt / 2, y + dt / 2, floorZ - 0.01, divTop)),

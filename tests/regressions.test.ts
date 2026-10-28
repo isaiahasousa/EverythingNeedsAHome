@@ -2,7 +2,8 @@
 import { readFileSync } from 'node:fs';
 import type { Manifold } from 'manifold-3d';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { BOX_TYPES, DEFAULT_PARAMS, normalizeParams } from '../src/boxes';
+import { BOX_ORDER, BOX_TYPES, DEFAULT_PARAMS, normalizeParams } from '../src/boxes';
+import { lengthProps } from '../src/ui/ParamField';
 import { frameMatrix, pointInPolygon, signedArea } from '../src/core/math';
 import { runBuild } from '../src/geometry/build';
 import { normalizeProject } from '../src/state/project';
@@ -674,7 +675,7 @@ describe('review round 5', () => {
     expect(setup('lidded', { lidStyle: 'rabbet', lipHeight: 0.5 }).errors[0].text).toMatch(/Lip depth/);
     // 12 mm across with 4 mm walls: even the thinnest (0.8 mm) lip leaves no room in the middle.
     const tiny = setup('lidded', { width: 12, depth: 12, lidStyle: 'plug', wall: 4, lipThickness: 0.8 });
-    expect(tiny.errors[0].text).toMatch(/too small for a lid lip/);
+    expect(tiny.errors[0].text).toMatch(/too small for a [\d.]+ mm lid lip/);
     expect(tiny.errors[0].text).not.toMatch(/at most 0 mm/);
   });
 
@@ -709,5 +710,121 @@ describe('review round 5', () => {
     const s = setup('gridfinity', { gfLip: true, gfWall: 1.2, gfZ: 4 });
     expect(s.R.inner[2]).toBeCloseTo(18.4, 6);
     expect(setup('gridfinity', { gfLip: false, gfZ: 4 }).R.inner[2]).toBeCloseTo(21, 6);
+  });
+});
+
+describe('review round 6', () => {
+  const gfx = (over: Partial<Graphic>): Graphic => ({
+    id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'rect', sides: 4, ratio: 0.5, corner: 0 }, x: 0, y: 0, w: 20, h: 10,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'deboss', depth: 0.8, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+  });
+  const rect = () => builtinShape('rect', 4, 0.5, 0);
+  const litho = (faceId: string, frame: { x: number; y: number; w: number; h: number }, max = 3, dark = false) => {
+    const pg = placeGraphic(gfx({ faceId, mode: 'lithophane', lithoMax: max, ...frame }), rect());
+    const pw = 30, ph = 20;
+    pg.litho = { pixels: Uint8Array.from({ length: pw * ph }, (_, i) => (dark ? 0 : (i * 37) % 256)), pw, ph, min: 0.8, max };
+    return pg;
+  };
+
+  for (const type of BOX_ORDER) {
+    it(`a lithophane just touching the edge of a ${type} face leaves the part whole`, () => {
+      const s = setup(type);
+      const faces = s.faces();
+      const solids = s.build();
+      const face = faces.find((f) => f.kind === 'plane' && f.id !== 'bottom' && !f.solid && f.outline.length >= 3)!;
+      for (const overlapBy of [0.01, 0.03, 0.05]) {
+        const out = applyGraphics(solids, faces, [litho(face.id, { x: -face.width / 2 - 15 + overlapBy, y: 0, w: 30, h: 8 })]);
+        const before = solids[face.partId].volume(), after = out.solids[face.partId].volume();
+        expect(Math.abs(after - before), `${type} ${face.id} overlap ${overlapBy}`).toBeLessThan(5);
+        expect(out.solids[face.partId].status()).toBe('NoError');
+      }
+    });
+  }
+
+  it('a small photo in the hinged finger notch leaves the box whole', () => {
+    const s = setup('hinged');
+    const solids = s.build();
+    const front = s.faces().find((f) => f.id === 'front')!;
+    const out = applyGraphics(solids, s.faces(), [litho('front', { x: 0, y: front.height / 2 - 4, w: 12, h: 8 })]);
+    expect(out.solids.base.volume()).toBeGreaterThan(solids.base.volume() * 0.95);
+  });
+
+  const shortBoxes: [keyof typeof BOX_TYPES, Partial<BoxParams>][] = [
+    ['lidded', { lidStyle: 'rabbet', height: 14, lidHeight: 8 }],
+    ['hinged', { alignLip: false, height: 16, lidHeight: 10, knuckleDiameter: 4 }],
+    ['polygon', { polyLid: true, lidStyle: 'rabbet', height: 14, lidHeight: 8 }],
+    ['jar', { height: 20, threadLength: 3 }],
+  ];
+  for (const [type, over] of shortBoxes) {
+    it(`a thick lithophane in the bottom of a short ${type} stays clear of the lid`, () => {
+      const s = setup(type, over);
+      expect(s.errors).toEqual([]);
+      const solids = s.build();
+      const bottom = s.faces().find((f) => f.id === 'bottom')!;
+      const out = applyGraphics(solids, s.faces(), [litho('bottom', { x: 0, y: 0, w: bottom.width * 0.9, h: bottom.height * 0.9 }, 8, true)]);
+      const ids = Object.keys(out.solids);
+      for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) expect(overlap(out.solids[ids[i]], out.solids[ids[j]]), `${ids[i]} x ${ids[j]}`).toBeLessThan(0.01);
+    });
+  }
+
+  it('engravings, inlays and cut-outs on top of a raised graphic go through it', () => {
+    const s = setup('tray');
+    const faces = s.faces();
+    const solids = s.build();
+    const plaque = placeGraphic(gfx({ mode: 'emboss', depth: 1, w: 50, h: 20 }), rect());
+    const dot = (mode: Graphic['mode']) => placeGraphic(gfx({ mode, depth: 0.6, w: 10, h: 10, source: { kind: 'shape', shape: 'circle', sides: 4, ratio: 0.5, corner: 0 } }), builtinShape('circle'));
+    const alone = applyGraphics(solids, faces, [plaque]).solids.base.volume();
+    const engraved = applyGraphics(solids, faces, [plaque, dot('deboss')]);
+    expect(alone - engraved.solids.base.volume()).toBeGreaterThan(Math.PI * 25 * 1.5);
+    const inlaid = applyGraphics(solids, faces, [plaque, dot('inlay')]);
+    expect(Object.values(inlaid.inlays)[0].solid.volume()).toBeGreaterThan(Math.PI * 25 * 0.5);
+    const cut = applyGraphics(solids, faces, [plaque, dot('cut')]);
+    const D = s.R.outer[1];
+    expect(cut.solids.base.intersect(box(-1, 1, -D / 2 - 2, -D / 2 + 2, s.R.outer[2] / 2 - 1, s.R.outer[2] / 2 + 1)).volume()).toBeLessThan(0.01);
+  });
+
+  it('warns when a lithophane ledges more than 2 mm into the box on a side wall', () => {
+    const s = setup('tray');
+    const warns = (max: number) => applyGraphics(s.build(), s.faces(), [litho('front', { x: 0, y: 0, w: 40, h: 30 }, max, true)], { base: BOX_TYPES.tray.parts(s.p, s.R)[0].print }).warnings;
+    expect(warns(6).some((w) => /ledge needs supports/.test(w.text))).toBe(true);
+    expect(warns(3.5).some((w) => /ledge needs supports/.test(w.text))).toBe(false);
+  });
+
+  it('a lithophane on a triangular box never pokes out of the box', () => {
+    for (const polyRound of [0, 1.5]) {
+      const s = setup('polygon', { sides: 3, polyLid: false, polyRound });
+      const solids = s.build();
+      const side = s.faces().find((f) => f.id === 'front')!;
+      const out = applyGraphics(solids, s.faces(), [litho('front', { x: 0, y: 0, w: side.width * 0.95, h: side.height * 0.8 }, 8, true)]);
+      expect(out.solids.base.subtract(solids.base.hull()).volume(), `rounding ${polyRound}`).toBeLessThan(0.01);
+    }
+  });
+
+  it('a Gridfinity bin with dividers still lets the next bin seat fully', () => {
+    const s = setup('gridfinity', { gfDividersX: 3, gfLabel: false, gfLip: true });
+    const { bin } = s.build();
+    const plain = setup('gridfinity', { gfDividersX: 1, gfLabel: false, gfLip: true }).build().bin;
+    expect(overlap(plain.translate([0, 0, (s.R.Hbody as number) - 0.34]), bin)).toBeLessThan(0.01);
+    const label = setup('gridfinity', { gfLabel: true, gfLip: true });
+    const raised = (depth: number) =>
+      applyGraphics(label.build(), label.faces(), [placeGraphic(gfx({ faceId: 'label', mode: 'emboss', depth, w: 20, h: 6 }), rect())]).warnings.some((w) => /stacked on top/.test(w.text));
+    expect(raised(0.8)).toBe(false);
+    expect(raised(0.9)).toBe(true);
+  });
+
+  it('"make it at least N mm across" uses the current lip and is then accepted', () => {
+    for (const [type, over] of [['lidded', { width: 10, depth: 10, wall: 4, tolerance: 0.2, lipThickness: 3, lidStyle: 'plug' }], ['hinged', { width: 10, depth: 10, wall: 4, tolerance: 0.2, lipThickness: 3 }]] as const) {
+      const s = setup(type, over as Partial<BoxParams>);
+      const m = /at least ([\d.]+) mm across/.exec(s.errors[0]?.text ?? '');
+      expect(m, s.errors[0]?.text).toBeTruthy();
+      const size = Number(m![1]);
+      expect(setup(type, { ...(over as Partial<BoxParams>), width: size, depth: size }).errors.filter((e) => /lip/.test(e.text))).toEqual([]);
+    }
+  });
+
+  it('inch nudges stay close to the millimetre step', () => {
+    expect(lengthProps('in', 0.05).step).toBeCloseTo(0.002, 6);
+    expect(lengthProps('in', 0.1).step).toBeCloseTo(0.004, 6);
+    expect(lengthProps('in', 1).step).toBe(0.05);
   });
 });

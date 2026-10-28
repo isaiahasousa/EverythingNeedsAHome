@@ -97,7 +97,7 @@ export const polygon: BoxType = {
       faces.push(planeFace('lid-top', 'Lid top', 'lid', [0, 0, H], [1, 0, 0], [0, 1, 0], [0, 0, 1], 2 * Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1])) - Math.min(...pts.map((q) => q[1])), lt, { onBed: true, outline: pts, innerRoom: topRoom }));
     }
     const bottomPts: Vec2[] = outlinePts.map(([x, y]) => [x, -y] as Vec2).reverse();
-    faces.push(planeFace('bottom', 'Bottom', 'base', [0, 0, 0], [1, 0, 0], [0, -1, 0], [0, 0, -1], R.outer[0], R.outer[1], p.floor, { onBed: true, outline: bottomPts, innerRoom: floorRoom(R) }));
+    faces.push(planeFace('bottom', 'Bottom', 'base', [0, 0, 0], [1, 0, 0], [0, -1, 0], [0, 0, -1], R.outer[0], R.outer[1], p.floor, { onBed: true, outline: bottomPts, innerRoom: floorRoom(R, p.floor, R.Hb as number) }));
     return faces;
   },
   parts(p, R) {

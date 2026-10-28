@@ -81,7 +81,7 @@ export const sliding: BoxType = {
       ...withRoom(wallFaces('base', W, D, 0, H - lt, r, p.wall, '', '', ['front']), cavityRoom(R)),
       ...withRoom(wallFaces('base', W, D, 0, H - lt - 0.3, r, p.wall, '', '', ['back', 'left', 'right']), cavityRoom(R)),
       ...lidFaces,
-      { ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R) },
+      { ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R, p.floor, H - lt) },
     ];
   },
   parts(_p, R) {

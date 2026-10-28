@@ -79,7 +79,7 @@ export const snapGrooveDepth = (tol: number) => Math.max(0, SNAP_GROOVE_R - (SNA
 export function lipTooThick(span: number, p: BoxParams, otherwise: string) {
   const maxLip = Math.floor(((span - 2 - 2 * (p.wall + p.tolerance)) / 2) * 10 + EPS) / 10;
   if (maxLip >= 0.8) return `The lid's lip is too thick for a box this small. Use a lip thickness of at most ${fmt(maxLip)} mm, or a larger box.`;
-  return `The box is too small for a lid lip with these walls. Make it at least ${fmt(ceilTo(2 + 2 * (p.wall + p.tolerance + 0.8), 0.5))} mm across, or ${otherwise}.`;
+  return `The box is too small for a ${fmt(p.lipThickness)} mm lid lip with these walls. Make it at least ${fmt(ceilTo(2 + 2 * (p.wall + p.tolerance + p.lipThickness), 0.5))} mm across, or ${otherwise}.`;
 }
 
 /** Smallest width or depth across the box, for checks on lips that reach inside it. */
@@ -281,7 +281,7 @@ export const lidded: BoxType = {
         faces.push(...(style === 'plug' ? withRoom(lidWalls, open) : lidWalls));
       }
     }
-    faces.push({ ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R) });
+    faces.push({ ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R, p.floor, Hb) });
     return faces;
   },
   parts(_p, R) {

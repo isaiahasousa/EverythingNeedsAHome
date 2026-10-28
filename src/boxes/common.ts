@@ -75,8 +75,12 @@ export const OPEN_BEHIND = 50;
 /** Room behind a wall facing an open cavity: up to half the narrowest inside dimension. */
 export const cavityRoom = (R: Resolved) => Math.max(0, Math.min(OPEN_BEHIND, R.inner[0] / 2 - 0.5, R.inner[1] / 2 - 0.5));
 
-/** Room above a floor: the usable inside height. */
-export const floorRoom = (R: Resolved) => Math.max(0, Math.min(OPEN_BEHIND, R.inner[2] - 0.5));
+/**
+ * Room above a floor: the usable inside height, and never past the top of the walls (`wallsTop`, from
+ * the bed) where a lid or cap sits. The bottom face also covers the walls' footprint.
+ */
+export const floorRoom = (R: Resolved, floor: number, wallsTop = Infinity) =>
+  Math.max(0, Math.min(OPEN_BEHIND, R.inner[2] - 0.5, wallsTop - floor - 0.5));
 
 /** The same faces with `innerRoom` set (how far a lithophane may reach inward past the wall). */
 export const withRoom = (faces: FaceDef[], innerRoom: number): FaceDef[] => faces.map((f) => ({ ...f, innerRoom }));

@@ -40,7 +40,7 @@ export const tray: BoxType = {
     const [W, D, H] = R.outer;
     const r = R.r as number;
     // An open tray has nothing behind its walls or above its floor: lithophanes may reach inward.
-    return [...withRoom(wallFaces('base', W, D, 0, H, r, p.wall), cavityRoom(R)), { ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R) }];
+    return [...withRoom(wallFaces('base', W, D, 0, H, r, p.wall), cavityRoom(R)), { ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R, p.floor) }];
   },
   parts() {
     return [{ id: 'base', name: 'Tray', print: IDENTITY, explode: [0, 0, 0], tip: 'Print upright. No supports needed.' }];

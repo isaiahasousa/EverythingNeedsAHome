@@ -4,7 +4,8 @@ import { NumberField, Select, Toggle } from './controls';
 
 export function lengthProps(units: 'mm' | 'in', step = 1) {
   return units === 'in'
-    ? { scale: 25.4, unit: 'in', decimals: 3, step: step >= 1 ? 0.05 : 0.01 }
+    ? // Nudges close to the millimetre step: 0.05 mm is about 0.002 in, not 0.01 in (0.254 mm).
+      { scale: 25.4, unit: 'in', decimals: 3, step: step >= 1 ? 0.05 : Math.max(0.001, Math.round((step / 25.4) * 1000) / 1000) }
     : { scale: 1, unit: 'mm', decimals: 2, step };
 }
 

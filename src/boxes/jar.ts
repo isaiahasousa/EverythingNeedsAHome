@@ -115,7 +115,7 @@ export const jar: BoxType = {
       planeFace('bottom', 'Bottom', 'jar', [0, 0, 0], [1, 0, 0], [0, -1, 0], [0, 0, -1], 2 * Rr, 2 * Rr, p.floor, {
         onBed: true,
         outline: circlePoints(Rr - 0.6, 96),
-        innerRoom: floorRoom(R),
+        innerRoom: floorRoom(R, p.floor, Hb),
       }),
     ];
     const body = faces[0];
