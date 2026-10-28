@@ -145,7 +145,8 @@ export function patternShape(kind: PatternKind, w: number, h: number, cell: numb
       grid(s + g, s + g, false, (cx, cy) => roundedRectPoints(s, s, 0, 1).map(([x, y]) => [x + cx, y + cy] as Vec2));
       break;
     case 'diamond': {
-      const d = s / Math.SQRT2;
+      // Point-to-point width = hole size; diagonal neighbours then sit exactly `web` apart.
+      const d = s / 2;
       grid(s + g * Math.SQRT2, (s + g * Math.SQRT2) / 2, true, (cx, cy) => [[cx, cy - d], [cx + d, cy], [cx, cy + d], [cx - d, cy]] as Vec2[]);
       break;
     }

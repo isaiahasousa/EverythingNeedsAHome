@@ -54,7 +54,7 @@ export function loadFont(id: string): Promise<Font> {
   if (isCustomFont(id)) {
     // Never fall back to another font: the outline would silently change in the exported model.
     const custom = customFonts.get(id);
-    return custom ? custom.font : Promise.reject(new Error(`The font “${id.slice(7)}” is not loaded. Upload it again with “Use my own font”.`));
+    return custom ? custom.font : Promise.reject(new Error(`The font “${customFontName(id)}” is not loaded. Upload it again with “Use my own font”.`));
   }
   let p = fontCache.get(id);
   if (!p) {
@@ -110,10 +110,17 @@ function setCustomFont(id: string, font: Promise<Font>, print: string) {
 export async function registerCustomFont(buf: ArrayBuffer, name: string): Promise<SavedFont> {
   const ot = await loadOpentype();
   const font = ot.parse(buf); // throws for files opentype.js cannot read; nothing is registered then
-  const id = 'custom:' + name;
   const data = bufferToBase64(buf);
-  setCustomFont(id, Promise.resolve(font), fingerprint(data));
+  const print = fingerprint(data);
+  // The id names the file's contents: another font uploaded under the same name gets its own id.
+  const id = `custom:${name}#${print.replace(':', '-')}`;
+  setCustomFont(id, Promise.resolve(font), print);
   return { id, name, data };
+}
+
+/** The name a user font was uploaded as. */
+export function customFontName(id: string) {
+  return id.slice(7).replace(/#[^#]*$/, '');
 }
 
 let lastSaved: SavedFont[] | undefined;

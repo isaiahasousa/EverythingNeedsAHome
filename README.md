@@ -87,7 +87,7 @@ Cloudflare to run `npm run build` and serve `dist/`. Either kind of Cloudflare p
 
 **As a Worker** (the dashboard's default **Workers & Pages → Create → Import a repository** flow):
 
-1. Pick `isaiahasousa/everythingneedsahome`. Keep the default deploy command, `npx wrangler deploy`.
+1. Pick `isaiahasousa/EverythingNeedsAHome`. Keep the default deploy command, `npx wrangler deploy`.
    Leave the build command empty (`wrangler.jsonc` runs the build).
 2. The Worker's name must match `name` in `wrangler.jsonc` (`everythingneedsahome`). If you chose another
    name, change that line to match; otherwise the build stops with a name error.

@@ -2,8 +2,8 @@
 import type { Manifold } from 'manifold-3d';
 import { BOX_TYPES } from '../boxes';
 import type { BuildRequest, BuildResult, Mat4, MeshGroup, PartInfo, PartMesh, Vec3, Warning } from '../core/types';
-import { applyGraphics } from './graphics3d';
-import { releaseAll, setQuality, transformed } from './kernel';
+import { applyGraphics, MIN_PIECE } from './graphics3d';
+import { K, releaseAll, setQuality, transformed } from './kernel';
 
 const CREASE = Math.cos((32 * Math.PI) / 180);
 const EDGE = Math.cos((38 * Math.PI) / 180);
@@ -162,10 +162,17 @@ export function runBuild(req: BuildRequest): BuildResult {
     // Settings the checks above missed must never silently drop or split a part.
     for (const info of infos) {
       const solid = solids[info.id];
-      if (!solid || solid.isEmpty() || solid.status() !== 'NoError')
+      if (!solid || solid.isEmpty() || solid.status() !== 'NoError') {
         warnings.push({ level: 'error', text: `The ${info.name.toLowerCase()} has no solid left with these settings. Make the box larger or the walls and lips thinner.` });
-      else if (solid.decompose().length > 1)
-        warnings.push({ level: 'warn', text: `The ${info.name.toLowerCase()} comes out in separate pieces with these settings. Make the box larger or the walls and lips thinner.` });
+        continue;
+      }
+      // Specks left by the booleans are not printable; drop them before counting pieces.
+      const pieces = solid.decompose();
+      if (pieces.length < 2) continue;
+      const real = pieces.filter((m) => m.volume() >= MIN_PIECE);
+      if (real.length < pieces.length && real.length) solids[info.id] = K().Manifold.compose(real);
+      if (real.length > 1)
+        warnings.push({ level: 'warn', text: `The ${info.name.toLowerCase()} comes out in ${real.length} separate pieces with these settings. Try thicker walls or a larger box.` });
     }
     if (warnings.some((w) => w.level === 'error')) return { id: req.id, parts, faces, warnings, ms: performance.now() - t0 };
     const g = applyGraphics(solids, faces, req.graphics);

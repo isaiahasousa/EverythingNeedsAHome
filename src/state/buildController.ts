@@ -31,7 +31,7 @@ async function placeAll(p: Project): Promise<{ graphics: PlacedGraphic[]; notes:
     if (g.hidden) continue;
     try {
       if (g.mode === 'lithophane') {
-        if (g.source.kind !== 'image') continue;
+        if (g.source.kind !== 'image') throw new Error('Only photos can be lithophanes. Choose another effect.');
         const pg = placeGraphic(g, unitRect);
         const px = await lithophanePixels(g.source.dataUrl, g.w, g.h, true);
         pg.litho = { ...px, min: Math.min(g.lithoMin, g.lithoMax), max: Math.max(g.lithoMin, g.lithoMax) };

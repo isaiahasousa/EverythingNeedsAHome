@@ -166,9 +166,12 @@ export const fmt = (v: number) => (Math.round(v * 100) / 100).toString();
  * the whole strip along the edge is removed instead.
  */
 export function notchOutline(outline: Vec2[], halfW: number, depth: number, edge: 'top' | 'bottom'): Vec2[] {
+  if (outline.length < 3) return [];
   const vs = outline.map((q) => q[1]);
   const vEdge = edge === 'bottom' ? Math.min(...vs) : Math.max(...vs);
   const dir = edge === 'bottom' ? 1 : -1; // counter-clockwise: the bottom edge runs +x, the top edge -x
+  // A notch reaching the far side would split what is left in two: nothing usable remains.
+  if (depth >= Math.max(...vs) - Math.min(...vs) - 0.5) return [];
   const inner = vEdge + dir * depth;
   for (let i = 0; i < outline.length; i++) {
     const a = outline[i], b = outline[(i + 1) % outline.length];

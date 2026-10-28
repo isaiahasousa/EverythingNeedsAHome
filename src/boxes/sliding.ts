@@ -1,4 +1,4 @@
-import { clipConvex, IDENTITY, rectPoints, roundedRectPoints } from '../core/math';
+import { clipConvex, IDENTITY, rectPoints, roundedRectPoints, signedArea } from '../core/math';
 import { box, loftRoundedRect, profileXZ, profileYZ, prism, rrect, unionAll } from '../geometry/kernel';
 import type { BoxParams, Resolved } from '../core/types';
 import { bottomFace, clampRadius, commonWarnings, F, fmt, notchOutline, planeFace, rectDims, wallFaces, type BoxType } from './common';
@@ -73,18 +73,27 @@ export const sliding: BoxType = {
     if (r > inset) lidOutline = clipConvex(lidOutline, shift(roundedRectPoints(W - 2 * inset, D - 2 * inset, r - inset, 8)));
     // Keep graphics off the thumb grip ridges near the front edge.
     if (p.thumbGrip) lidOutline = notchOutline(lidOutline, (R.gripLen as number) / 2 + 0.5, (R.gripDepth as number) + 0.5, 'bottom');
+    // On a lid that is all grip there is no room left for graphics.
+    const lidFaces = Math.abs(signedArea(lidOutline)) >= 20 ? [planeFace('lid-top', 'Lid top', 'lid', [0, cy, H], [1, 0, 0], [0, 1, 0], [0, 0, 1], lidW, lidD, lt, { outline: lidOutline })] : [];
     return [
       // The front wall stops under the lid; the others are thinned by the dovetail slot above H - lt.
       ...wallFaces('base', W, D, 0, H - lt, r, p.wall, '', '', ['front']),
       ...wallFaces('base', W, D, 0, H - lt - 0.3, r, p.wall, '', '', ['back', 'left', 'right']),
-      planeFace('lid-top', 'Lid top', 'lid', [0, cy, H], [1, 0, 0], [0, 1, 0], [0, 0, 1], lidW, lidD, lt, { outline: lidOutline }),
+      ...lidFaces,
       bottomFace('base', W, D, r, p.floor),
     ];
   },
   parts(_p, R) {
     const D = R.D as number;
+    const gentle = (R.g as number) <= (R.lt as number) + 1e-9;
     return [
-      { id: 'base', name: 'Box', print: IDENTITY, explode: [0, 0, 0], tip: 'Print upright. The dovetail overhang is gentle enough to print without supports.' },
+      {
+        id: 'base',
+        name: 'Box',
+        print: IDENTITY,
+        explode: [0, 0, 0],
+        tip: gentle ? 'Print upright. The dovetail overhang is gentle enough to print without supports.' : 'Print upright, with supports for the dovetail groove (its overhang is steeper than 45°).',
+      },
       { id: 'lid', name: 'Sliding lid', print: IDENTITY, explode: [0, -(D * 0.75 + 10), 4], tip: 'Print flat, top facing up.' },
     ];
   },
@@ -102,6 +111,8 @@ export const sliding: BoxType = {
     if (p.grooveDepth > p.wall - 0.8)
       w.push({ level: 'warn', text: `Only ${fmt(p.wall - Math.min(p.grooveDepth, p.wall - 0.4))} mm of wall remains behind the groove. Use thicker walls or a shallower groove.` });
     if (p.slideLid < 1.6) w.push({ level: 'warn', text: 'A lid thinner than 1.6 mm may warp or snap.' });
+    if (g > (R.lt as number) + 1e-9)
+      w.push({ level: 'warn', text: `The groove is deeper than the lid is thick, so the dovetail overhang is steeper than 45° and needs supports. Use a lid at least ${fmt(g)} mm thick or a shallower groove.` });
     return w;
   },
   build(p, R) {

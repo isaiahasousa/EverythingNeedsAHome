@@ -1,5 +1,5 @@
 import type { CrossSection, Manifold } from 'manifold-3d';
-import { IDENTITY, regularPolygon, rotX } from '../core/math';
+import { IDENTITY, regularPolygon, rotX, roundedPolygonPoints } from '../core/math';
 import { poly, prism } from '../geometry/kernel';
 import type { BoxParams, FaceDef, LidStyle, PartInfo, Resolved, Vec2 } from '../core/types';
 import { commonWarnings, F, planeFace, topNotchOutline, type BoxType } from './common';
@@ -79,10 +79,11 @@ export const polygon: BoxType = {
     const faces: FaceDef[] = sideFrames(R, apothem).map(({ k, n, u, o }) =>
       planeFace(k === 0 ? 'front' : `side${k + 1}`, k === 0 ? 'Side 1 (front)' : `Side ${k + 1}`, 'base', [o[0], o[1], top / 2], u, [0, 0, 1], n, sideLen, top, p.wall, { outline }),
     );
-    const outlinePts = regularPolygon(N, Rc - rp * 0.5);
+    // The real rounded outline: graphics clipped to it never reach past a rounded corner.
+    const outlinePts = roundedPolygonPoints(N, Rc, rp);
     if (lid) {
       const grow = style === 'cap' ? p.tolerance + p.wall : 0;
-      const pts = regularPolygon(N, Rc + grow / Math.cos(Math.PI / N) - rp * 0.5);
+      const pts = roundedPolygonPoints(N, Rc, rp, grow);
       faces.push(planeFace('lid-top', 'Lid top', 'lid', [0, 0, H], [1, 0, 0], [0, 1, 0], [0, 0, 1], 2 * Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1])) - Math.min(...pts.map((q) => q[1])), R.lt as number, { onBed: true, outline: pts }));
     }
     const bottomPts: Vec2[] = outlinePts.map(([x, y]) => [x, -y] as Vec2).reverse();

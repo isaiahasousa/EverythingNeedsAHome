@@ -4,10 +4,10 @@ import { imageAspect } from '../../graphics/raster';
 import { onOutlineEpoch, outlineEpoch, peekShape, resolveShape, shapeError } from '../../graphics/resolve';
 import { shapePathData, shapeSize } from '../../graphics/shape2d';
 import { builtinShape, PATTERNS, SHAPES } from '../../graphics/shapes';
-import { FONTS, fontUrl, registerCustomFont } from '../../graphics/text';
+import { customFontName, FONTS, fontUrl, registerCustomFont } from '../../graphics/text';
 import { graphicsOnFace, useFaces } from '../../state/buildController';
 import { FILAMENTS, newGraphic, withFont } from '../../state/project';
-import { setUI, toast, update, updateGraphic, useBuild, useProject, useUI } from '../../state/store';
+import { projectStore, setUI, toast, update, updateGraphic, useBuild, useProject, useUI } from '../../state/store';
 import { NumberField, Segmented, Select, Slider, Swatches, Toggle } from '../controls';
 import { Icon, ModeIcon, type IconName } from '../icons';
 import { lengthProps } from '../ParamField';
@@ -68,6 +68,8 @@ export function GraphicThumb({ g }: { g: Graphic }) {
     </svg>
   );
 }
+
+const currentGraphic = (id: string) => projectStore.get().graphics.find((x) => x.id === id);
 
 /** Size a new graphic to sit comfortably on the face. */
 function fitToFace(face: FaceDef, aspect: number, share = 0.6): { w: number; h: number } {
@@ -365,6 +367,8 @@ function Inspector({ g, face, faces }: { g: Graphic; face: FaceDef; faces: FaceD
   const refit = async (next: Graphic, keep: 'h' | 'w', key: string) => {
     try {
       const s = await resolveShape(next);
+      // An undo (or another edit) may have changed the graphic meanwhile; then this size is stale.
+      if (currentGraphic(g.id)?.source !== next.source) return;
       const [bw, bh] = shapeSize(s);
       updateGraphic(g.id, keep === 'h' ? { w: +((next.h * bw) / bh).toFixed(3) } : { h: +((next.w * bh) / bw).toFixed(3) }, key);
     } catch {
@@ -383,6 +387,7 @@ function Inspector({ g, face, faces }: { g: Graphic; face: FaceDef; faces: FaceD
     if (m !== 'lithophane' && !g.lockAspect) return;
     try {
       const { aspect } = await graphicAspect({ ...g, mode: m });
+      if (currentGraphic(g.id)?.mode !== m) return;
       updateGraphic(g.id, { h: Math.max(1, +(g.w / aspect).toFixed(2)) }, 'mode');
     } catch {
       /* the outline error shows inline */
@@ -495,7 +500,7 @@ function SourceFields({ g, setSource }: { g: Graphic; setSource: (patch: Partial
           ))}
           {s.font.startsWith('custom:') && (
             <button type="button" aria-pressed>
-              <span className="fname">{s.font.slice(7)}</span>
+              <span className="fname">{customFontName(s.font)}</span>
               <span className="fnote">Your font, saved with the project</span>
             </button>
           )}

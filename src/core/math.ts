@@ -107,6 +107,26 @@ export function regularPolygon(sides: number, circumR: number): Vec2[] {
   return circlePoints(circumR, sides, phase);
 }
 
+/**
+ * The outline of a regular polygon (circumradius `circumR`) with its corners rounded to radius `r`,
+ * grown outward by `grow`: exactly what offsetting the polygon in by `r` and out by `r + grow` makes.
+ */
+export function roundedPolygonPoints(sides: number, circumR: number, r: number, grow = 0, perCorner = 8): Vec2[] {
+  if (r <= 0 && grow <= 0) return regularPolygon(sides, circumR);
+  const half = Math.PI / sides;
+  const core = regularPolygon(sides, circumR - r / Math.cos(half));
+  const phase = -Math.PI / 2 + Math.PI / sides;
+  const out: Vec2[] = [];
+  core.forEach(([x, y], k) => {
+    const a = phase + (k * 2 * Math.PI) / sides;
+    for (let i = 0; i <= perCorner; i++) {
+      const t = a - half + (2 * half * i) / perCorner;
+      out.push([x + (r + grow) * Math.cos(t), y + (r + grow) * Math.sin(t)]);
+    }
+  });
+  return out;
+}
+
 export function rectPoints(w: number, h: number): Vec2[] {
   return [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]];
 }

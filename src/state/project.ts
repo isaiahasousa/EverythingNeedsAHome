@@ -99,6 +99,9 @@ export function blankProject(type: BoxTypeId = 'tray'): Project {
 const MODES: GraphicMode[] = ['emboss', 'deboss', 'cut', 'inlay', 'lithophane'];
 const SOURCE_KINDS: GraphicSource['kind'][] = ['text', 'svg', 'image', 'shape', 'pattern'];
 
+/** A `#rrggbb` colour, or the fallback: 3MF files and the preview need exactly that form. */
+const hex = (v: unknown, fallback: string) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : fallback);
+
 function num(v: unknown, fallback: number, min: number, max: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
 }
@@ -133,11 +136,12 @@ function normalizeGraphic(raw: Graphic): Graphic {
     depth: num(g.depth, 0.8, 0.05, 12),
     lithoMin: num(g.lithoMin, 0.8, 0.4, 5),
     lithoMax: num(g.lithoMax, 3, 0.8, 8),
-    mode: MODES.includes(g.mode) ? g.mode : 'deboss',
+    // Only photos can be lithophanes.
+    mode: MODES.includes(g.mode) && (g.mode !== 'lithophane' || s.kind === 'image') ? g.mode : 'deboss',
     lockAspect: g.lockAspect !== false,
     mirror: g.mirror === true,
     hidden: g.hidden === true,
-    color: typeof g.color === 'string' ? g.color : '#ece6d6',
+    color: hex(g.color, '#ece6d6'),
   };
 }
 
@@ -154,7 +158,7 @@ export function normalizeProject(raw: unknown): Project {
       ? p.graphics.filter((g) => g && typeof g === 'object' && g.source && typeof g.source === 'object' && SOURCE_KINDS.includes(g.source.kind)).map(normalizeGraphic)
       : [],
     units: p.units === 'in' ? 'in' : 'mm',
-    color: typeof p.color === 'string' ? p.color : '#2f8a87',
+    color: hex(p.color, '#2f8a87'),
     printer: typeof p.printer === 'string' ? p.printer : 'bed256',
     fonts: Array.isArray(p.fonts)
       ? p.fonts.filter((f): f is SavedFont => !!f && typeof f.id === 'string' && f.id.startsWith('custom:') && typeof f.name === 'string' && typeof f.data === 'string')

@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import type { Manifold } from 'manifold-3d';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { BOX_TYPES, DEFAULT_PARAMS, normalizeParams } from '../src/boxes';
-import { frameMatrix, pointInPolygon } from '../src/core/math';
+import { frameMatrix, pointInPolygon, signedArea } from '../src/core/math';
+import { runBuild } from '../src/geometry/build';
+import { normalizeProject } from '../src/state/project';
 import { applyGraphics } from '../src/geometry/graphics3d';
 import { box, prism, releaseAll, rrect, transformed } from '../src/geometry/kernel';
 import { placeGraphic } from '../src/graphics/shape2d';
 import { builtinShape, patternShape } from '../src/graphics/shapes';
-import { loadFont, registerCustomFont, registerSavedFonts } from '../src/graphics/text';
+import { customFontName, loadFont, registerCustomFont, registerSavedFonts } from '../src/graphics/text';
 import { evalExpr } from '../src/ui/controls';
 import type { BoxParams, FaceDef, Graphic, Vec2 } from '../src/core/types';
 import { loadKernel } from './setup-kernel';
@@ -374,9 +376,120 @@ describe('custom fonts', () => {
 
   it('fonts saved in a project load again', async () => {
     const saved = await registerCustomFont(file, 'Mine');
-    expect(saved.id).toBe('custom:Mine');
+    expect(saved.id.startsWith('custom:Mine#')).toBe(true);
+    expect(customFontName(saved.id)).toBe('Mine');
     registerSavedFonts([{ ...saved, id: 'custom:FromFile' }]);
     const font = await loadFont('custom:FromFile');
     expect(font.unitsPerEm).toBeGreaterThan(0);
+  });
+});
+
+describe('review round 3', () => {
+  /** Smallest gap between any two holes of a vent pattern (vertex-to-edge distances). */
+  function minGap(rings: Vec2[][]) {
+    const segDist = (q: Vec2, a: Vec2, b: Vec2) => {
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(q[0] - a[0] - t * dx, q[1] - a[1] - t * dy);
+    };
+    const centre = (r: Vec2[]) => r.reduce((s, q) => [s[0] + q[0] / r.length, s[1] + q[1] / r.length] as Vec2, [0, 0] as Vec2);
+    let best = Infinity;
+    for (let i = 0; i < rings.length; i++)
+      for (let j = 0; j < rings.length; j++) {
+        if (i === j) continue;
+        const [ci, cj] = [centre(rings[i]), centre(rings[j])];
+        if (Math.hypot(ci[0] - cj[0], ci[1] - cj[1]) > 40) continue;
+        for (const q of rings[i]) for (let k = 0; k < rings[j].length; k++) best = Math.min(best, segDist(q, rings[j][k], rings[j][(k + 1) % rings[j].length]));
+      }
+    return best;
+  }
+
+  it('every vent pattern leaves exactly the web asked for between holes', () => {
+    for (const kind of ['hex', 'circle', 'square', 'diamond', 'slot'] as const)
+      for (const [cell, web] of [[5, 1.6], [3, 1.2], [10, 1.6], [8, 2]] as const) {
+        const rings = patternShape(kind, 60, 40, cell, web).layers[0].rings;
+        expect(rings.length, `${kind} ${cell}/${web}`).toBeGreaterThan(1);
+        expect(minGap(rings), `${kind} ${cell}/${web}`).toBeGreaterThanOrEqual(web - 0.05);
+      }
+  });
+
+  it('warns when the dovetail overhang is steeper than 45 degrees', () => {
+    const steep = setup('sliding', { wall: 4, grooveDepth: 3.2, slideLid: 1.6 });
+    expect(steep.warnings.some((w) => /steeper than 45/.test(w.text))).toBe(true);
+    expect(steep.t.parts(steep.p, steep.R)[0].tip).toMatch(/supports/);
+    expect(setup('sliding').warnings.some((w) => /steeper than 45/.test(w.text))).toBe(false);
+  });
+
+  it('a lid that is all thumb grip has no graphics face, and an empty outline never means "no clipping"', () => {
+    const s = setup('sliding', { width: 30, depth: 14, wall: 1.2, grooveDepth: 0.6, slideLid: 1.6 });
+    for (const f of s.faces()) if (f.id === 'lid-top') expect(Math.abs(signedArea(f.outline))).toBeGreaterThanOrEqual(20);
+    const solids = s.build();
+    const face = { ...s.faces().find((f) => f.id === 'bottom')!, outline: [] as Vec2[] };
+    const out = applyGraphics(solids, [face], [placeGraphic({ id: 'g', faceId: 'bottom', source: { kind: 'shape', shape: 'star', sides: 5, ratio: 0.45, corner: 0 }, x: 0, y: 0, w: 60, h: 60, lockAspect: true, rotation: 0, mirror: false, mode: 'emboss', depth: 1, color: '#ffffff', lithoMin: 0.8, lithoMax: 3, hidden: false }, builtinShape('star', 5, 0.45, 0))]);
+    expect(out.solids.base.volume()).toBeCloseTo(solids.base.volume(), 3);
+    expect(out.warnings.some((w) => /no room/.test(w.text))).toBe(true);
+  });
+
+  for (const threadClearance of [0.1, 0.25]) {
+    it(`fine jar threads keep clearance on both flanks (pitch 1.5, clearance ${threadClearance})`, () => {
+      const s = setup('jar', { threadPitch: 1.5, threadDepth: 3, threadClearance });
+      const { jar, cap } = s.build();
+      const pitch = s.R.pitch as number;
+      for (const turn of [0, 0.02, 0.05, 0.1, 0.25]) {
+        // Unscrewing (right-hand thread): turn anticlockwise about +Z while rising one pitch per turn.
+        const moved = cap.rotate([0, 0, turn * 360]).translate([0, 0, turn * pitch]);
+        expect(overlap(jar, moved), `turn ${turn}`).toBeLessThan(0.01);
+      }
+    });
+  }
+
+  it('a thin-walled jar keeps its cap in one piece (knurling is skipped)', () => {
+    for (const diameter of [20, 80, 160]) {
+      const r = runBuild({ id: 1, type: 'jar', params: { ...DEFAULT_PARAMS, diameter, wall: 0.8, grip: 'knurl' }, graphics: [], quality: 'fine' });
+      expect(r.warnings.filter((w) => /pieces|no solid/.test(w.text)), `d ${diameter}`).toEqual([]);
+      expect(r.parts.map((p) => p.id).sort()).toEqual(['cap', 'jar']);
+    }
+  });
+
+  it('jar sized from the inside gives an opening of the typed diameter', () => {
+    const s = setup('jar', { dimsMode: 'inner', diameter: 80 });
+    expect(2 * (s.R.rBore as number)).toBeCloseTo(80, 6);
+    expect(s.R.inner[0]).toBeCloseTo(80, 6);
+  });
+
+  it('triangle polygon faces stay inside the rounded outline', () => {
+    for (const lidStyle of ['plug', 'cap'] as const) {
+      const s = setup('polygon', { sides: 3, diameter: 80, polyRound: 20, polyLid: true, lidStyle });
+      const solids = s.build();
+      for (const id of ['lid-top', 'bottom']) {
+        const f = s.faces().find((x) => x.id === id)!;
+        const part = solids[f.partId].boundingBox();
+        const ys = f.outline.map((q) => q[1] * (id === 'bottom' ? -1 : 1) + f.origin[1]);
+        const xs = f.outline.map((q) => q[0] + f.origin[0]);
+        expect(Math.max(...ys), `${lidStyle} ${id}`).toBeLessThanOrEqual(part.max[1] + 0.01);
+        expect(Math.min(...ys), `${lidStyle} ${id}`).toBeGreaterThanOrEqual(part.min[1] - 0.01);
+        expect(Math.max(...xs), `${lidStyle} ${id}`).toBeLessThanOrEqual(part.max[0] + 0.01);
+      }
+    }
+  });
+
+  it('two different fonts uploaded under the same name stay separate', async () => {
+    const read = (f: string) => new Uint8Array(readFileSync(new URL(`../public/fonts/${f}`, import.meta.url))).buffer;
+    const a = await registerCustomFont(read('pacifico.woff'), 'Logo');
+    const b = await registerCustomFont(read('bebas-neue.woff'), 'Logo');
+    expect(a.id).not.toBe(b.id);
+    expect(customFontName(a.id)).toBe('Logo');
+    expect((await loadFont(a.id)).names).not.toEqual((await loadFont(b.id)).names);
+  });
+
+  it('project files get valid colours, and only photos stay lithophanes', () => {
+    const p = normalizeProject({
+      type: 'tray',
+      color: 'red',
+      graphics: [{ id: 'g', faceId: 'front', source: { kind: 'text', text: 'A', font: 'archivo-black', align: 'center', lineSpacing: 1, letterSpacing: 0 }, mode: 'lithophane', color: 'blue' }],
+    });
+    expect(p.color).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(p.graphics[0].color).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(p.graphics[0].mode).toBe('deboss');
   });
 });

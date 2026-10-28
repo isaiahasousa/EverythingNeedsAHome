@@ -118,7 +118,11 @@ export function applyGraphics(
         out.warnings.push({ scope: 'graphics', level: 'warn', text: `${label} is solid underneath, so a graphic there cannot cut through or be a lithophane. Engrave it instead.` });
         continue;
       }
-      const outline = face.outline.length >= 3 ? poly(face.outline as Vec2[]) : null;
+      if (face.outline.length < 3) {
+        out.warnings.push({ scope: 'graphics', level: 'warn', text: `There is no room for graphics on ${label} with these settings, so one was skipped.` });
+        continue;
+      }
+      const outline = poly(face.outline as Vec2[]);
       if (g.mode === 'lithophane') {
         const relief = lithophane(g);
         if (!relief) continue;
@@ -185,7 +189,7 @@ export function applyGraphics(
 const mm = (v: number) => (Math.round(v * 100) / 100).toString();
 
 /** Pieces smaller than this (mm³) are boolean leftovers, not printable features. */
-const MIN_PIECE = 0.5;
+export const MIN_PIECE = 0.5;
 
 /**
  * Drop specks the booleans leave behind, and warn when graphics split a part into loose pieces

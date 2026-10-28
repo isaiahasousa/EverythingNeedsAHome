@@ -13,13 +13,21 @@ export function threadLayout(pitch: number, depth: number) {
   return { flank, crest: flat, root: flat, base: flat + 2 * flank, tip: flat };
 }
 
+/** Deepest thread that keeps a 0.2 mm flat at crest and root, so both flanks get the full clearance. */
+export const maxThreadDepth = (pitch: number) => Math.max(0.3, Math.min(pitch * 0.4, (pitch - 0.4) / 2));
+
+/** How far knurl notches reach into the cap wall: never closer than 0.8 mm to the inside. */
+export const knurlDepth = (wall: number) => Math.min(0.6, wall - 0.8);
+
 function resolve(p: BoxParams): Resolved {
   const t = p.wall;
   const inner = p.dimsMode === 'inner';
-  const Dm = inner ? p.diameter + 2 * t : p.diameter;
-  const R = Dm / 2;
   const pitch = Math.max(1, p.threadPitch);
-  const td = Math.max(0.3, Math.min(p.threadDepth, pitch * 0.4));
+  const td = Math.min(Math.max(0.3, p.threadDepth), maxThreadDepth(pitch));
+  const tn = Math.max(1.2, t);
+  // Sized from the inside, the diameter is the opening: what fits through the neck.
+  const Dm = inner ? p.diameter + 2 * (t + p.threadClearance + td + tn) : p.diameter;
+  const R = Dm / 2;
   // The cap ridge sits half a pitch below the neck ridge, and both taper in and out over a quarter
   // turn, so the thread must be long enough for the ridges to overlap by a full turn at full depth.
   const minL = 1.1 + threadLayout(pitch, td).base + 2 * pitch;
@@ -29,7 +37,6 @@ function resolve(p: BoxParams): Resolved {
   const rc = R - t; // cap inner wall radius (thread root of the cap)
   const rMajor = rc - c; // neck crest
   const rn = rMajor - td; // neck root
-  const tn = Math.max(1.2, t);
   const rBore = rn - tn;
   const Hcap = L + 0.6 + capTop;
   // Inside height runs from the floor to the underside of the cap.
@@ -45,7 +52,7 @@ export const jar: BoxType = {
   name: 'Screw-top jar',
   tagline: 'Round container with a threaded cap.',
   dims: [
-    { kind: 'length', key: 'diameter', label: 'Diameter', min: 20, max: 300 },
+    { kind: 'length', key: 'diameter', label: 'Diameter', min: 20, max: 300, help: 'Outside diameter. When sizing by the inside, the width of the opening, which is what fits in.' },
     { ...F.height, help: 'Total height with the cap on.' } as typeof F.height,
     F.wall,
     F.floor,
@@ -143,7 +150,8 @@ export const jar: BoxType = {
     if (c < 0.25) w.push({ level: 'warn' as const, text: 'Thread clearance under 0.25 mm often binds. Try 0.4 mm.' });
     if ((R.L as number) > p.threadLength + 0.01)
       w.push({ level: 'info' as const, text: `Thread length raised to ${fmt(R.L as number)} mm so the cap grips for at least one full turn at this pitch.` });
-    if (p.threadDepth > p.threadPitch * 0.4) w.push({ level: 'info' as const, text: 'Thread depth is limited to 40% of the pitch.' });
+    if (p.threadDepth > td + 1e-9) w.push({ level: 'info' as const, text: `Thread depth is limited to ${fmt(td)} mm at this pitch.` });
+    if (p.grip === 'knurl' && knurlDepth(p.wall) < 0.2) w.push({ level: 'info' as const, text: 'Walls under 1 mm are too thin to knurl, so the cap is smooth.' });
     if (p.wall < 1.2) w.push({ level: 'warn' as const, text: 'Walls under 1.2 mm are fragile.' });
     return w;
   },
@@ -183,11 +191,12 @@ export const jar: BoxType = {
     const jarSolid = unionAll([body, neck]).subtract(cavity);
     // Cap: knurled shell with the matching internal ridge, half a pitch from the neck ridge.
     let outerCS = circle(Rr);
-    if (p.grip === 'knurl') {
+    const kd = knurlDepth(t);
+    if (p.grip === 'knurl' && kd >= 0.2) {
       const nK = Math.max(12, Math.round((2 * Math.PI * Rr) / 3.2));
       const notches = Array.from({ length: nK }, (_, i) => {
         const a = (i / nK) * Math.PI * 2;
-        return circle(0.85, 16).translate([(Rr + 0.25) * Math.cos(a), (Rr + 0.25) * Math.sin(a)]);
+        return circle(0.85, 16).translate([(Rr + 0.85 - kd) * Math.cos(a), (Rr + 0.85 - kd) * Math.sin(a)]);
       });
       outerCS = outerCS.subtract(K().CrossSection.union(notches));
     }

@@ -164,6 +164,24 @@ try {
   }
   check(picked === 'Front', `clicking the model selects the face under the cursor (${picked})`);
   const countOn = async (face) => Number((await page.textContent(`.chip:has-text("${face}") .count`).catch(() => '0')) || 0);
+  /** Waits (up to 15 s) for the graphics count on a face chip to reach `n`; returns the count seen last. */
+  const countReaches = async (face, n) => {
+    await page
+      .waitForFunction(([f, want]) => [...document.querySelectorAll('.chip')].some((c) => c.textContent.includes(f) && Number(c.querySelector('.count')?.textContent || 0) === want), [face, n], { timeout: 15000 })
+      .catch(() => {});
+    return countOn(face);
+  };
+  /** Waits (up to 10 s) for the selected graphic's width / height to come close to `ratio`; returns the last ratio. */
+  const ratioReaches = async (ratio) => {
+    const read = () => page.$$eval('.inspector .pair .field input', (els) => els.slice(0, 2).map((e) => Number(e.value))).then(([w, h]) => w / h);
+    await page
+      .waitForFunction((r) => {
+        const [w, h] = [...document.querySelectorAll('.inspector .pair .field input')].slice(0, 2).map((e) => Number(e.value));
+        return Math.abs(w / h - r) < 0.02;
+      }, ratio, { timeout: 10000 })
+      .catch(() => {});
+    return read();
+  };
   const before = await countOn('Front');
   await page.click('.add-grid button:has-text("Text")');
   await page.fill('#graphic-text', 'M3 BOLTS');
@@ -172,7 +190,7 @@ try {
   await settle();
   check((await countOn('Front')) === before + 1, 'text added to the front');
   await page.type('#graphic-text', 'XY', { delay: 60 });
-  await page.waitForTimeout(1000);
+  await settle();
   await page.click('.step-title');
   await page.keyboard.press('Control+z');
   check((await page.inputValue('#graphic-text')) === 'M3 BOLTS', 'one undo takes back a burst of typing');
@@ -192,22 +210,18 @@ try {
   check((await countOn('Right')) >= 1, 'PNG traced onto the right side');
   const onRight = await countOn('Right');
   await page.setInputFiles('.add-grid + input[type=file]', blankPng);
-  await page.waitForTimeout(600);
-  check((await countOn('Right')) === onRight + 1, 'an image with nothing to trace is still added');
+  check((await countReaches('Right', onRight + 1)) === onRight + 1, 'an image with nothing to trace is still added');
   check(/nothing solid/i.test((await page.textContent('.toast').catch(() => '')) || ''), 'and the app says how to make it traceable');
   await page.keyboard.press('Control+z');
   await settle();
   // The logo traces to a square outline on a 3:2 picture: lithophane and back must keep each shape.
   await page.click('.chip:has-text("Right")');
   await page.click('.glist .gitem >> nth=0');
-  const size = async () => (await page.$$eval('.inspector .pair .field input', (els) => els.slice(0, 2).map((e) => Number(e.value)))).reduce((w, h) => w / h);
-  const traced = await size();
+  const traced = await ratioReaches(1);
   await page.click('.mode-grid button:has-text("Lithophane")');
-  await page.waitForTimeout(600);
-  const photo = await size();
+  const photo = await ratioReaches(1.5);
   await page.click('.mode-grid button:has-text("Engraved")');
-  await page.waitForTimeout(600);
-  const back = await size();
+  const back = await ratioReaches(traced);
   check(Math.abs(photo - 1.5) < 0.02 && Math.abs(back - traced) < 0.02, `switching to lithophane and back keeps proportions (${traced.toFixed(2)} → ${photo.toFixed(2)} → ${back.toFixed(2)})`);
   await settle();
   await page.click('.chip:has-text("Back")');
