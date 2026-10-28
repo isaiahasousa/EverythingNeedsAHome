@@ -605,3 +605,109 @@ describe('review round 4', () => {
     expect(out.warnings.some((w) => /face this box does not have/.test(w.text))).toBe(true);
   });
 });
+
+describe('review round 5', () => {
+  const gfx = (over: Partial<Graphic>): Graphic => ({
+    id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'rect', sides: 4, ratio: 0.5, corner: 0 }, x: 0, y: 0, w: 20, h: 10,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'deboss', depth: 0.8, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+  });
+  const rect = () => builtinShape('rect', 4, 0.5, 0);
+  const litho = (faceId: string, frame: { x: number; y: number; w: number; h: number; rotation?: number }, max = 3) => {
+    const pg = placeGraphic(gfx({ faceId, mode: 'lithophane', lithoMax: max, rotation: frame.rotation ?? 0, ...frame }), rect());
+    const pw = 30, ph = 20;
+    pg.litho = { pixels: Uint8Array.from({ length: pw * ph }, (_, i) => (i * 37) % 256), pw, ph, min: 0.8, max };
+    return pg;
+  };
+  /** Deterministic pseudo-random numbers in [0, 1). */
+  const rng = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+
+  it('lithophanes always fuse with their wall (no loose shell, no false warning)', () => {
+    const rand = rng(7);
+    const cases: [keyof typeof BOX_TYPES, Partial<BoxParams>, string][] = [
+      ['tray', {}, 'front'], ['lidded', {}, 'lid-top'], ['lidded', {}, 'front'], ['jar', {}, 'front'], ['polygon', {}, 'side2'], ['hinged', {}, 'lid-top'],
+    ];
+    for (const [type, over, faceId] of cases) {
+      const s = setup(type, over);
+      const faces = s.faces();
+      const solids = s.build();
+      const face = faces.find((f) => f.id === faceId)!;
+      for (let k = 0; k < 6; k++) {
+        const w = 10 + rand() * (face.width * 0.7 - 10), h = 8 + rand() * (face.height * 0.7 - 8);
+        const frame = { w, h, x: (rand() - 0.5) * (face.width - w) * 0.8, y: (rand() - 0.5) * (face.height - h) * 0.8 };
+        const out = applyGraphics(solids, faces, [litho(faceId, frame)]);
+        const part = out.solids[face.partId];
+        expect(part.decompose().length, `${type} ${faceId} ${JSON.stringify(frame)}`).toBe(1);
+        expect(out.warnings.some((x) => /loose pieces/.test(x.text)), `${type} ${faceId}`).toBe(false);
+      }
+    }
+  });
+
+  it('an inlay deeper than the wall stops flush with the inside', () => {
+    for (const [type, faceId, y] of [['drawers', 'left', 0], ['lidded', 'front', 14], ['hinged', 'front', 12]] as const) {
+      const s = setup(type);
+      const solids = s.build();
+      const out = applyGraphics(solids, s.faces(), [placeGraphic(gfx({ faceId, mode: 'inlay', depth: 3, w: 30, h: 8, y }), rect())]);
+      const fill = Object.values(out.inlays)[0].solid;
+      expect(fill.volume(), `${type}`).toBeGreaterThan(10);
+      for (const [id, m] of Object.entries(out.solids)) expect(overlap(fill, m), `${type}: fill x ${id}`).toBeLessThan(0.01);
+    }
+  });
+
+  /** Apply the "at least N mm" a refusal advises to `key`, and check the box is then accepted. */
+  const followAdvice = (type: keyof typeof BOX_TYPES, over: Partial<BoxParams>, key: keyof BoxParams) => {
+    const s = setup(type, over);
+    expect(s.errors.length, JSON.stringify(over)).toBeGreaterThan(0);
+    const m = /at least ([\d.]+) mm/.exec(s.errors[0].text);
+    expect(m, s.errors[0].text).toBeTruthy();
+    const after = setup(type, { ...over, [key]: Number(m![1]) });
+    expect(after.errors.map((e) => e.text), `${key} = ${m![1]}`).toEqual([]);
+  };
+
+  it('refusals advise values that are then accepted', () => {
+    followAdvice('hinged', { dimsMode: 'inner', height: 6, floor: 0.6, lipHeight: 1, knuckleDiameter: 20 }, 'height');
+    followAdvice('hinged', { floor: 8.8, lidHeight: 118.2, height: 120 }, 'height');
+    followAdvice('lidded', { lidStyle: 'cap', lidTop: 10, lidHeight: 5 }, 'lidHeight');
+    followAdvice('lidded', { lidStyle: 'cap', lidTop: 2.2, lidHeight: 2.5 }, 'lidHeight');
+    followAdvice('lidded', { lidStyle: 'rabbet', lidTop: 3, lidHeight: 3 }, 'lidHeight');
+    followAdvice('lidded', { lidStyle: 'rabbet', wall: 1, tolerance: 0.4 }, 'wall');
+    followAdvice('hinged', { knuckleDiameter: 10, lidHeight: 4.5, lidTop: 2 }, 'lidHeight');
+    expect(setup('lidded', { lidStyle: 'rabbet', lipHeight: 0.5 }).errors[0].text).toMatch(/Lip depth/);
+    // 12 mm across with 4 mm walls: even the thinnest (0.8 mm) lip leaves no room in the middle.
+    const tiny = setup('lidded', { width: 12, depth: 12, lidStyle: 'plug', wall: 4, lipThickness: 0.8 });
+    expect(tiny.errors[0].text).toMatch(/too small for a lid lip/);
+    expect(tiny.errors[0].text).not.toMatch(/at most 0 mm/);
+  });
+
+  it('lithophanes use the free space behind lid tops, jar bottoms and walls below a lip', () => {
+    const limited = (type: keyof typeof BOX_TYPES, over: Partial<BoxParams>, faceId: string, frame: { x: number; y: number; w: number; h: number }) => {
+      const s = setup(type, over);
+      const out = applyGraphics(s.build(), s.faces(), [litho(faceId, frame, 5)]);
+      return out.warnings.some((x) => /is limited to/.test(x.text));
+    };
+    expect(limited('lidded', { lidStyle: 'plug' }, 'lid-top', { x: 0, y: 0, w: 40, h: 30 })).toBe(false);
+    expect(limited('hinged', {}, 'lid-top', { x: 0, y: 0, w: 40, h: 30 })).toBe(false);
+    expect(limited('jar', {}, 'bottom', { x: 0, y: 0, w: 30, h: 30 })).toBe(false);
+    expect(limited('hinged', { height: 60 }, 'back', { x: 0, y: 0, w: 30, h: 10 })).toBe(false);
+    // Low on a plug-lid box's front there is room; up where the lip comes down there is not.
+    expect(limited('lidded', { lidStyle: 'plug' }, 'front', { x: 0, y: -8, w: 30, h: 10 })).toBe(false);
+    expect(limited('lidded', { lidStyle: 'plug' }, 'front', { x: 0, y: 12, w: 30, h: 10 })).toBe(true);
+    expect(limited('lidded', { lidStyle: 'cap' }, 'lid-top', { x: 0, y: 0, w: 40, h: 30 })).toBe(true);
+  });
+
+  it('warns when a raised graphic on a side wall is tall enough to need supports', () => {
+    const raised = (type: keyof typeof BOX_TYPES, faceId: string, depth: number) => {
+      const r = runBuild({ id: 1, type, params: { ...DEFAULT_PARAMS }, graphics: [placeGraphic(gfx({ faceId, mode: 'emboss', depth, w: 30, h: 6 }), rect())], quality: 'fine' });
+      return r.warnings.some((x) => /needs supports/.test(x.text));
+    };
+    expect(raised('tray', 'front', 3)).toBe(true);
+    expect(raised('tray', 'front', 1.5)).toBe(false);
+    expect(raised('gridfinity', 'label', 0.9)).toBe(false);
+    expect(raised('sliding', 'lid-top', 4)).toBe(false);
+  });
+
+  it('Gridfinity inside height is full-width space below the stacking lip', () => {
+    const s = setup('gridfinity', { gfLip: true, gfWall: 1.2, gfZ: 4 });
+    expect(s.R.inner[2]).toBeCloseTo(18.4, 6);
+    expect(setup('gridfinity', { gfLip: false, gfZ: 4 }).R.inner[2]).toBeCloseTo(21, 6);
+  });
+});

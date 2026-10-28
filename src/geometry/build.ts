@@ -175,7 +175,7 @@ export function runBuild(req: BuildRequest): BuildResult {
         warnings.push({ level: 'warn', text: `The ${info.name.toLowerCase()} comes out in ${real.length} separate pieces with these settings. Try thicker walls or a larger box.` });
     }
     if (warnings.some((w) => w.level === 'error')) return { id: req.id, parts, faces, warnings, ms: performance.now() - t0 };
-    const g = applyGraphics(solids, faces, req.graphics);
+    const g = applyGraphics(solids, faces, req.graphics, Object.fromEntries(infos.map((i) => [i.id, i.print])));
     warnings.push(...g.warnings, ...(req.notes ?? []));
     for (const info of infos) {
       const solid = g.solids[info.id];

@@ -2,7 +2,7 @@ import type { CrossSection, Manifold } from 'manifold-3d';
 import { IDENTITY, rotX } from '../core/math';
 import { K, prism, rrect, segs, unionAll } from '../geometry/kernel';
 import type { BoxParams, FaceDef, LidStyle, Resolved, Vec2, Warning } from '../core/types';
-import { bottomFace, cavityRoom, clampRadius, commonWarnings, F, floorRoom, fmt, rectDims, topFace, topNotchOutline, wallFaces, withRoom, type BoxType } from './common';
+import { bottomFace, cavityRoom, ceilTo, clampRadius, commonWarnings, EPS, F, floorRoom, fmt, rectDims, topFace, topNotchOutline, wallFaces, withRoom, type BoxType } from './common';
 
 export interface SideAnchor {
   /** Point on the outer face at the middle of a straight side, and its outward normal. */
@@ -71,6 +71,16 @@ const SNAP_BUMP_OUT = 0.5;
 const SNAP_GROOVE_R = SNAP_BUMP_R + 0.15;
 /** How far a snap groove reaches into the box wall for fit clearance `tol`. */
 export const snapGrooveDepth = (tol: number) => Math.max(0, SNAP_GROOVE_R - (SNAP_BUMP_R - SNAP_BUMP_OUT) - tol);
+
+/**
+ * Advice when a lip running inside the walls leaves no room in the middle: the thickest lip that fits,
+ * or (when even the thinnest lip does not fit) how big the box has to be.
+ */
+export function lipTooThick(span: number, p: BoxParams, otherwise: string) {
+  const maxLip = Math.floor(((span - 2 - 2 * (p.wall + p.tolerance)) / 2) * 10 + EPS) / 10;
+  if (maxLip >= 0.8) return `The lid's lip is too thick for a box this small. Use a lip thickness of at most ${fmt(maxLip)} mm, or a larger box.`;
+  return `The box is too small for a lid lip with these walls. Make it at least ${fmt(ceilTo(2 + 2 * (p.wall + p.tolerance + 0.8), 0.5))} mm across, or ${otherwise}.`;
+}
 
 /** Smallest width or depth across the box, for checks on lips that reach inside it. */
 const minSpan = (R: Resolved) => (typeof R.minSpan === 'number' ? R.minSpan : Math.min(R.W as number, R.D as number));
@@ -154,48 +164,54 @@ export function lidWarnings(p: BoxParams, R: Resolved): Warning[] {
   const Hl = R.Hl as number, lt = R.lt as number, lipH = R.lipH as number;
   const neck = R.neck as number, skirt = R.skirt as number;
   const H = R.H as number;
-  if ((R.Hb as number) < p.floor + 2) {
+  if ((R.Hb as number) < p.floor + 2 - EPS) {
     w.push({ level: 'error', text: 'The lid is taller than the box. Reduce the lid height or make the box taller.' });
     return w;
   }
-  if (style === 'cap' && Hl > H) {
+  if (style === 'cap' && Hl > H + EPS) {
     w.push({ level: 'error', text: `The cap would reach below the bottom of the box. Make the lid height at most ${fmt(Math.floor(H * 2) / 2)} mm.` });
     return w;
   }
   if (style === 'cap') {
     // The cap's skirt has to come down over the top of the box (which stops 0.3 mm under the cap top).
     const grip = Hl - lt - 0.3;
-    if (grip < 1) {
-      w.push({ level: 'error', text: `A cap this short would only rest on the box. Make the lid at least ${fmt(Math.ceil((lt + 2.3) * 2) / 2)} mm tall so it slips over the box.` });
+    if (grip < 1 - EPS) {
+      w.push({ level: 'error', text: `A cap this short would only rest on the box. Make the lid at least ${fmt(ceilTo(p.lidTop + 1.3, 0.5))} mm tall so it slips over the box.` });
       return w;
     }
-    if (grip < 2) w.push({ level: 'warn', text: `The cap only overlaps the box by ${fmt(grip)} mm and will come off easily. Make the lid taller.` });
+    if (grip < 2 - EPS) w.push({ level: 'warn', text: `The cap only overlaps the box by ${fmt(grip)} mm and will come off easily. Make the lid taller.` });
   }
   if (style === 'rabbet') {
-    if (lipH < 1) {
-      w.push({ level: 'error', text: `A flush lid this short cannot cover the box's neck. Make the lid at least ${fmt(Math.ceil((lt + 1.3) * 2) / 2)} mm tall, or choose another lid style.` });
+    if (lipH < 1 - EPS) {
+      w.push({
+        level: 'error',
+        text:
+          p.lipHeight < 1 - EPS
+            ? 'A flush lid needs a lip depth of at least 1 mm to hold onto the box. Increase Lip depth.'
+            : `A flush lid this short cannot cover the box's neck. Make the lid at least ${fmt(ceilTo(p.lidTop + 1.3, 0.5))} mm tall, or choose another lid style.`,
+      });
       return w;
     }
     // The wall is split into the box's neck, the clearance and the lid's skirt; each needs a printed line.
-    if (skirt < 0.4 || neck < 0.4) {
-      w.push({ level: 'error', text: `The walls are too thin for a flush lid with ${fmt(p.tolerance)} mm of clearance. Use walls of at least ${fmt(0.8 + p.tolerance)} mm, less clearance, or another lid style.` });
+    if (skirt < 0.4 - EPS || neck < 0.4 - EPS) {
+      w.push({ level: 'error', text: `The walls are too thin for a flush lid with ${fmt(p.tolerance)} mm of clearance. Use walls of at least ${fmt(ceilTo(0.8 + p.tolerance, 0.1))} mm, less clearance, or another lid style.` });
       return w;
     }
-    if (skirt < 0.8 || neck < 0.8)
+    if (skirt < 0.8 - EPS || neck < 0.8 - EPS)
       w.push({ level: 'warn', text: `The flush step leaves a ${fmt(neck)} mm neck and a ${fmt(skirt)} mm lid skirt. Walls of at least ${fmt(1.6 + p.tolerance)} mm keep both sturdy.` });
-    if (lipH < 2) w.push({ level: 'warn', text: 'A neck shorter than 2 mm will barely hold the lid in place. Make the lid taller.' });
+    if (lipH < 2 - EPS) w.push({ level: 'warn', text: 'A neck shorter than 2 mm will barely hold the lid in place. Make the lid taller.' });
     if (lipH < p.lipHeight - 0.01) w.push({ level: 'info', text: `Lip depth limited to ${fmt(lipH)} mm by the lid height.` });
   }
   if (style === 'plug') {
     // The lid's lip runs inside the walls; it needs room in the middle.
     const room = minSpan(R) - 2 * (p.wall + p.tolerance + p.lipThickness);
-    if (room < 2) {
-      w.push({ level: 'error', text: `The lid's lip is too thick for a box this small. Use a lip thickness of at most ${fmt(Math.max(0, Math.floor(((minSpan(R) - 2 - 2 * (p.wall + p.tolerance)) / 2) * 10) / 10))} mm, or a larger box.` });
+    if (room < 2 - EPS) {
+      w.push({ level: 'error', text: lipTooThick(minSpan(R), p, 'choose another lid style') });
       return w;
     }
     if (lipH < p.lipHeight - 0.01) w.push({ level: 'info', text: `Lip depth limited to ${fmt(lipH)} mm so it clears the floor of the box.` });
-    if (lipH < 2) w.push({ level: 'warn', text: 'A lip shorter than 2 mm will not hold the lid in place.' });
-    if (p.snap && lipH >= 3 && p.wall - snapGrooveDepth(p.tolerance) < 0.8)
+    if (lipH < 2 - EPS) w.push({ level: 'warn', text: 'A lip shorter than 2 mm will not hold the lid in place.' });
+    if (p.snap && lipH >= 3 && p.wall - snapGrooveDepth(p.tolerance) < 0.8 - EPS)
       w.push({ level: 'warn', text: `The snap grooves leave only ${fmt(p.wall - snapGrooveDepth(p.tolerance))} mm of wall. Use walls of at least ${fmt(0.8 + snapGrooveDepth(p.tolerance))} mm or turn off snap bumps.` });
   }
   if (p.snap && style !== 'plug') w.push({ level: 'info', text: 'Snap bumps are only added to the inset plug lid.' });
@@ -242,6 +258,10 @@ export const lidded: BoxType = {
     // Lithophanes may reach inward only where nothing mates behind the wall: not where a plug lip sits
     // inside the box walls, nor where a cap or flush lid's skirt wraps the box.
     const open = cavityRoom(R);
+    const lipH = R.lipH as number;
+    // Under the lid top: a plug lid's own cavity; above a flush lid's neck, what the neck leaves; a cap
+    // sits right on the box.
+    const topRoom = style === 'plug' ? Math.max(0, Hl - lt - 0.5) : style === 'rabbet' ? Math.max(0, Hl - lt - lipH - 0.5) : 0;
     if (style === 'cap') {
       const g = p.tolerance + p.wall;
       faces.push(...withRoom(wallFaces('base', W, D, 0, Math.max(1, H - Hl - 0.6), r, p.wall), open));
@@ -252,9 +272,10 @@ export const lidded: BoxType = {
       for (const f of wallFaces('base', W, D, 0, Hb, r, p.wall, '', '', undefined)) {
         const notch = snapNotch(p, R, f.width);
         const face = notch ? { ...f, outline: topNotchOutline(f.width, f.height, { kind: 'rect', ...notch }) } : f;
-        faces.push(style === 'plug' ? face : { ...face, innerRoom: open });
+        // A plug's lip comes down inside the top of the walls: the room only counts below it.
+        faces.push(style === 'plug' ? { ...face, innerRoom: open, roomTop: Hb / 2 - lipH - 0.3 } : { ...face, innerRoom: open });
       }
-      faces.push(topFace('lid-top', 'Lid top', 'lid', W, D, r, H, lt, true));
+      faces.push({ ...topFace('lid-top', 'Lid top', 'lid', W, D, r, H, lt, true), innerRoom: topRoom });
       if (Hl - lt >= 5 && (R.skirt as number) >= 0.4) {
         const lidWalls = wallFaces('lid', W, D, Hb, H, r, R.skirt as number, 'lid-', 'Lid');
         faces.push(...(style === 'plug' ? withRoom(lidWalls, open) : lidWalls));

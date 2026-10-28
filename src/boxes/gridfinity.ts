@@ -37,7 +37,9 @@ function resolve(p: BoxParams): Resolved {
   const shelfTop = Hbody - (p.gfLip ? 1.2 : 0);
   const shelfBottom = shelfTop - shelfDepth - 1.2;
   const shelfFrontY = D / 2 - tw + 0.3 - shelfDepth;
-  return { outer: [W, D, H], inner: [W - 2 * tw, D - 2 * tw, Hbody - GF.baseHeight], nx, ny, nz, W, D, Hbody, H, tw, label, faceTop, shelfDepth, shelfTop, shelfBottom, shelfFrontY };
+  // Inside height is full-width space: with the stacking lip it ends where the lip's support starts.
+  const insideTop = p.gfLip ? lipSupport : Hbody;
+  return { outer: [W, D, H], inner: [W - 2 * tw, D - 2 * tw, insideTop - GF.baseHeight], nx, ny, nz, W, D, Hbody, H, tw, label, faceTop, shelfDepth, shelfTop, shelfBottom, shelfFrontY };
 }
 
 /** Row dividers that would be sealed in under the label shelf are left out. */

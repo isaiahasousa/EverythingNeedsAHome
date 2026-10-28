@@ -134,6 +134,8 @@ export interface FaceDef {
    * a mating part, a lid lip or a drawer sits behind the face.
    */
   innerRoom?: number;
+  /** When set, `innerRoom` applies only to windows lying wholly below this face height (v); above it a lip sits behind. */
+  roomTop?: number;
 }
 
 export interface PartInfo {

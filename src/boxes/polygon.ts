@@ -80,17 +80,21 @@ export const polygon: BoxType = {
     // Keep graphics off the snap grooves cut into the inside of the walls.
     const notch = lid ? snapNotch(p, R, sideLen) : null;
     const outline = notch ? topNotchOutline(sideLen, top, { kind: 'rect', ...notch }) : undefined;
-    // Lithophanes may reach inward past the walls unless a plug lip comes down inside them.
-    const innerRoom = lid && style === 'plug' ? 0 : cavityRoom(R);
+    // Lithophanes may reach inward past the walls, but not up where a plug lip comes down inside them.
+    const innerRoom = cavityRoom(R);
+    const roomTop = lid && style === 'plug' ? top / 2 - (R.lipH as number) - 0.3 : undefined;
     const faces: FaceDef[] = sideFrames(R, apothem).map(({ k, n, u, o }) =>
-      planeFace(k === 0 ? 'front' : `side${k + 1}`, k === 0 ? 'Side 1 (front)' : `Side ${k + 1}`, 'base', [o[0], o[1], top / 2], u, [0, 0, 1], n, sideLen, top, p.wall, { outline, innerRoom }),
+      planeFace(k === 0 ? 'front' : `side${k + 1}`, k === 0 ? 'Side 1 (front)' : `Side ${k + 1}`, 'base', [o[0], o[1], top / 2], u, [0, 0, 1], n, sideLen, top, p.wall, { outline, innerRoom, roomTop }),
     );
     // The real rounded outline: graphics clipped to it never reach past a rounded corner.
     const outlinePts = roundedPolygonPoints(N, Rc, rp);
     if (lid) {
       const grow = style === 'cap' ? p.tolerance + p.wall : 0;
       const pts = roundedPolygonPoints(N, Rc, rp, grow);
-      faces.push(planeFace('lid-top', 'Lid top', 'lid', [0, 0, H], [1, 0, 0], [0, 1, 0], [0, 0, 1], 2 * Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1])) - Math.min(...pts.map((q) => q[1])), R.lt as number, { onBed: true, outline: pts }));
+      // Under the lid top: a plug lid's own cavity, or what a flush lid's neck leaves; a cap sits on the box.
+      const Hl = R.Hl as number, lt = R.lt as number;
+      const topRoom = style === 'plug' ? Math.max(0, Hl - lt - 0.5) : style === 'rabbet' ? Math.max(0, Hl - lt - (R.lipH as number) - 0.5) : 0;
+      faces.push(planeFace('lid-top', 'Lid top', 'lid', [0, 0, H], [1, 0, 0], [0, 1, 0], [0, 0, 1], 2 * Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1])) - Math.min(...pts.map((q) => q[1])), lt, { onBed: true, outline: pts, innerRoom: topRoom }));
     }
     const bottomPts: Vec2[] = outlinePts.map(([x, y]) => [x, -y] as Vec2).reverse();
     faces.push(planeFace('bottom', 'Bottom', 'base', [0, 0, 0], [1, 0, 0], [0, -1, 0], [0, 0, -1], R.outer[0], R.outer[1], p.floor, { onBed: true, outline: bottomPts, innerRoom: floorRoom(R) }));

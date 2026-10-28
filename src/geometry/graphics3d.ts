@@ -1,8 +1,8 @@
 // Applies placed graphics to part solids: emboss, deboss, cut-through, colour inlays and lithophanes,
 // on flat faces (affine transform) and cylindrical faces (true wrap via warp).
 import type { CrossSection, Manifold } from 'manifold-3d';
-import { frameMatrix } from '../core/math';
-import type { FaceDef, PlacedGraphic, Vec2, Warning } from '../core/types';
+import { applyMatDir, frameMatrix } from '../core/math';
+import type { FaceDef, Mat4, PlacedGraphic, Vec2, Vec3, Warning } from '../core/types';
 import { emptySolid, K, poly, transformed, unionAll } from './kernel';
 
 const OVERLAP = 0.3;
@@ -96,10 +96,21 @@ function lithophane(g: PlacedGraphic): Manifold | null {
   return m.rotate([0, 0, rotation]).translate([g.frame.x, g.frame.y, 0]);
 }
 
+/** Highest point (face v) of a graphic's rotated frame. */
+function frameTop(f: PlacedGraphic['frame']) {
+  const a = (f.rotation * Math.PI) / 180;
+  return f.y + (Math.abs(Math.sin(a)) * f.w + Math.abs(Math.cos(a)) * f.h) / 2;
+}
+
+/**
+ * Apply graphics to the part solids. `prints` (part id -> print rotation) lets raised graphics be checked
+ * against the direction they will print in.
+ */
 export function applyGraphics(
   solids: Record<string, Manifold>,
   faces: FaceDef[],
   graphics: PlacedGraphic[],
+  prints: Record<string, Mat4> = {},
 ): GraphicsOutcome {
   const out: GraphicsOutcome = { solids: { ...solids }, inlays: {}, colorIds: new Map(), warnings: [] };
   const faceById = new Map(faces.map((f) => [f.id, f]));
@@ -136,7 +147,8 @@ export function applyGraphics(
       if (g.mode === 'lithophane') {
         // The relief may reach inward only as far as the wall, plus any free space behind it: past that
         // it would hit a lid lip, a mating part or a drawer. The brightness range is squeezed to fit.
-        const room = face.thickness + (face.innerRoom ?? 0);
+        const behind = face.roomTop === undefined || frameTop(g.frame) <= face.roomTop ? (face.innerRoom ?? 0) : 0;
+        const room = face.thickness + behind;
         const L = g.litho!;
         let fitted = g;
         if (L.max > room + 1e-6) {
@@ -156,7 +168,8 @@ export function applyGraphics(
           out.warnings.push({ scope: 'graphics', level: 'warn', text: `A lithophane on ${label} is outside the face.` });
           continue;
         }
-        const hole = placeOnFace(slab(window, -(face.thickness + OVERLAP), OVERLAP), face);
+        // The hole is a hair smaller than the relief, so the two overlap and always fuse into one part.
+        const hole = placeOnFace(slab(window.offset(-0.02, 'Miter'), -(face.thickness + OVERLAP), OVERLAP), face);
         const clipped = relief.intersect(slab(window, -(fitted.litho!.max + 2), 1));
         const placed = placeOnFace(clipped, face).asOriginal();
         out.colorIds.set(placed.originalID(), g.color);
@@ -179,6 +192,15 @@ export function applyGraphics(
         out.colorIds.set(solid.originalID(), g.color);
         out.solids[face.partId] = base.add(solid);
         if (face.onBed) out.warnings.push({ scope: 'graphics', level: 'warn', text: `Raised graphics on ${label} face the print bed. Use Deboss or Inlay there, or print with supports.` });
+        // On a face that prints sideways, a raised graphic's underside is a flat overhang as deep as it is tall.
+        const n: Vec3 = face.kind === 'plane' ? face.n : [0, -1, 0];
+        const up = prints[face.partId] ? applyMatDir(prints[face.partId], n)[2] : n[2];
+        if (!face.onBed && up < 0.7 && depth > 2 + 1e-6)
+          out.warnings.push({
+            scope: 'graphics',
+            level: 'warn',
+            text: `Raised graphics on ${label} stand ${mm(depth)} mm proud. Printed on its side, a raise over 2 mm leaves an overhang underneath that needs supports. Lower them to 2 mm or use Engraved.`,
+          });
         if (face.raiseLimit && depth > face.raiseLimit.max + 1e-6)
           out.warnings.push({
             scope: 'graphics',
@@ -214,7 +236,8 @@ export function applyGraphics(
   for (const [partId, labels] of touched) tidyPart(out, partId, solids[partId], [...labels]);
   // Inlay fills only fill what is left of their pockets: never a through-cut, never the body.
   for (const inl of Object.values(out.inlays)) {
-    let fill = inl.solid.subtract(out.solids[inl.partId]);
+    // Only what the pocket took out of the part: an inlay deeper than the wall stops flush inside.
+    let fill = inl.solid.intersect(solids[inl.partId]).subtract(out.solids[inl.partId]);
     const through = cuts.get(inl.partId);
     if (through?.length) fill = fill.subtract(unionAll(through));
     inl.solid = dropSlivers(fill);

@@ -92,8 +92,10 @@ export function NumberField({ label, value, onChange, min = -Infinity, max = Inf
     return x;
   };
   const commit = (text: string) => {
-    const v = evalExpr(text);
     setDraft(null);
+    // Leaving a field without typing must not store the rounded display value (e.g. 3 decimals in inches).
+    if (text.trim() === shown) return;
+    const v = evalExpr(text);
     if (v === null) return;
     const next = clampV(v * scale);
     if (Math.abs(next - value) > 1e-9) onChange(next);

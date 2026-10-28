@@ -1,7 +1,7 @@
 import { circlePoints, IDENTITY, rotX } from '../core/math';
 import { circle, coneZ, cylZ, helicalRidge, K, prism, unionAll } from '../geometry/kernel';
 import type { BoxParams, FaceDef, Resolved } from '../core/types';
-import { cavityRoom, F, fmt, planeFace, type BoxType } from './common';
+import { cavityRoom, F, floorRoom, fmt, planeFace, type BoxType } from './common';
 
 /**
  * Thread layout shared by the neck and the cap. With 45-degree flanks the neck ridge and the cap
@@ -115,6 +115,7 @@ export const jar: BoxType = {
       planeFace('bottom', 'Bottom', 'jar', [0, 0, 0], [1, 0, 0], [0, -1, 0], [0, 0, -1], 2 * Rr, 2 * Rr, p.floor, {
         onBed: true,
         outline: circlePoints(Rr - 0.6, 96),
+        innerRoom: floorRoom(R),
       }),
     ];
     const body = faces[0];

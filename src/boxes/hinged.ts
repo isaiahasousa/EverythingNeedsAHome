@@ -2,7 +2,8 @@ import type { Manifold } from 'manifold-3d';
 import { clamp, IDENTITY, rotX } from '../core/math';
 import { box, cylX, cylY, K, loftRoundedRect, prism, rrect, unionAll } from '../geometry/kernel';
 import type { BoxParams, Resolved } from '../core/types';
-import { bottomFace, cavityRoom, clampRadius, commonWarnings, F, floorRoom, fmt, planeFace, rectDims, topFace, topNotchOutline, wallFaces, withRoom, type BoxType } from './common';
+import { bottomFace, cavityRoom, ceilTo, clampRadius, commonWarnings, EPS, F, floorRoom, fmt, planeFace, rectDims, topFace, topNotchOutline, wallFaces, withRoom, type BoxType } from './common';
+import { lipTooThick } from './lidded';
 
 /** Angle (degrees from horizontal) of the underside of a knuckle gusset whose strip runs `h` mm from the axis. */
 function gussetAngle(rk: number, e: number, h: number) {
@@ -91,20 +92,23 @@ export const hinged: BoxType = {
   faces(p, R) {
     const W = R.W as number, D = R.D as number, H = R.H as number;
     const r = R.r as number, Hb = R.Hb as number, Hl = R.Hl as number, lt = R.lt as number, rk = R.rk as number;
-    // Lithophanes may reach inward past the box walls only when no alignment lip comes down inside them.
+    // Lithophanes may reach inward past the box walls, but not up where the alignment lip comes down
+    // inside them; under the lid top there is the lid's own cavity.
     const open = cavityRoom(R);
-    const baseRoom = R.useLip ? 0 : open;
+    const roomTop = R.useLip ? Hb / 2 - (R.lipH as number) - 0.3 : undefined;
     const front = planeFace('front', 'Front', 'base', [0, -D / 2, Hb / 2], [1, 0, 0], [0, 0, 1], [0, -1, 0], W - 2 * r, Hb, p.wall, {
       outline: p.frontNotch ? topNotchOutline(W - 2 * r, Hb, { kind: 'arc', r: notchRadius(W, Hb) }) : undefined,
-      innerRoom: baseRoom,
+      innerRoom: open,
+      roomTop,
     });
     const faces = [
       front,
-      ...withRoom(wallFaces('base', W, D, 0, Hb, r, p.wall, '', '', ['left', 'right']), baseRoom),
-      topFace('lid-top', 'Lid top', 'lid', W, D, r, H, lt, true),
+      ...wallFaces('base', W, D, 0, Hb, r, p.wall, '', '', ['left', 'right']).map((f) => ({ ...f, innerRoom: open, roomTop })),
+      { ...topFace('lid-top', 'Lid top', 'lid', W, D, r, H, lt, true), innerRoom: Math.max(0, Hl - lt - 0.5) },
     ];
+    // The back face always ends below the knuckles, so well below the lip.
     const backTop = Hb - 3 * rk - 1;
-    if (backTop >= 6) faces.push(...withRoom(wallFaces('base', W, D, 0, backTop, r, p.wall, '', '', ['back']), baseRoom));
+    if (backTop >= 6) faces.push(...withRoom(wallFaces('base', W, D, 0, backTop, r, p.wall, '', '', ['back']), open));
     if (Hl - lt >= 5) faces.push(...withRoom(wallFaces('lid', W, D, Hb, H, r, R.lidWall as number, 'lid-', 'Lid', ['front', 'left', 'right']), open));
     faces.push({ ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R) });
     return faces;
@@ -130,16 +134,16 @@ export const hinged: BoxType = {
     const w = commonWarnings(p, R);
     const Hl = R.Hl as number, rk = R.rk as number, Hb = R.Hb as number, e = R.e as number;
     const minHb = R.minHb as number;
-    if (Hb < minHb) {
-      const need = Hl + minHb + (p.dimsMode === 'inner' ? -(p.floor + (R.lt as number)) : 0);
-      w.push({ level: 'error', text: `The box is too short for a ${fmt(Hl)} mm lid and ${fmt(2 * rk)} mm knuckles. Set the height to at least ${fmt(Math.ceil(need * 2) / 2)} mm, or lower the lid.` });
+    if (Hb < minHb - EPS) {
+      // The height that gives the box part `minHb`, in the units the height field uses (inside sizing
+      // adds the floor and the lid, or with the alignment lip the lip and the whole lid; see resolve).
+      const lip = p.alignLip ? Math.min(p.lipHeight, 6) : 0;
+      const need = p.dimsMode === 'inner' ? (p.alignLip ? minHb - p.floor - lip : minHb + Hl - p.floor - (R.lt as number)) : Hl + minHb;
+      w.push({ level: 'error', text: `The box is too short for a ${fmt(Hl)} mm lid and ${fmt(2 * rk)} mm knuckles. Set the height to at least ${fmt(Math.max(6, ceilTo(need, 0.5)))} mm, or lower the lid.` });
     }
-    if (Hl < rk) w.push({ level: 'error', text: `The lid must be at least ${fmt(rk)} mm tall to hold the hinge knuckles.` });
-    if (R.useLip && Math.min(R.W as number, R.D as number) - 2 * (p.wall + p.tolerance + p.lipThickness) < 2)
-      w.push({
-        level: 'error',
-        text: `The alignment lip is too thick for a box this small. Use a lip thickness of at most ${fmt(Math.max(0, Math.floor(((Math.min(R.W as number, R.D as number) - 2 - 2 * (p.wall + p.tolerance)) / 2) * 10) / 10))} mm, or turn the lip off.`,
-      });
+    if (Hl < rk - EPS) w.push({ level: 'error', text: `The lid must be at least ${fmt(ceilTo(rk, 0.1))} mm tall to hold the hinge knuckles.` });
+    if (R.useLip && Math.min(R.W as number, R.D as number) - 2 * (p.wall + p.tolerance + p.lipThickness) < 2 - EPS)
+      w.push({ level: 'error', text: lipTooThick(Math.min(R.W as number, R.D as number), p, 'turn the alignment lip off') });
     if ((R.span as number) < 6) w.push({ level: 'error', text: 'The box is too narrow for a hinge. Make it wider or reduce the corner radius.' });
     else if ((R.seg as number) < 2) w.push({ level: 'error', text: `The hinge is too short for ${R.n} knuckles. Use fewer knuckles or a longer hinge.` });
     if (Hb >= minHb && gussetAngle(rk, e, Hb) < 40) w.push({ level: 'warn', text: 'The knuckles on the box will need supports at this height. Make the box taller or the knuckles smaller.' });

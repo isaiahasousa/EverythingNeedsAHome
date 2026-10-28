@@ -66,6 +66,7 @@ interface FaceOpts {
   solid?: boolean;
   raiseLimit?: FaceDef['raiseLimit'];
   innerRoom?: number;
+  roomTop?: number;
 }
 
 /** Free space behind faces with nothing mating behind them: plenty for any lithophane. */
@@ -110,6 +111,7 @@ export function planeFace(
     solid: opts.solid,
     raiseLimit: opts.raiseLimit,
     innerRoom: opts.innerRoom,
+    roomTop: opts.roomTop,
   };
 }
 
@@ -166,7 +168,7 @@ export function bottomFace(partId: string, W: number, D: number, r: number, t: n
 
 export function commonWarnings(p: BoxParams, r: Resolved): Warning[] {
   const w: Warning[] = [];
-  if (p.wall < 1.2) w.push({ level: 'warn', text: `Walls of ${p.wall} mm are fragile. 1.2 mm or more prints reliably with a 0.4 mm nozzle.` });
+  if (p.wall < 1.2 - EPS) w.push({ level: 'warn', text: `Walls of ${fmt(p.wall)} mm are fragile. 1.2 mm or more prints reliably with a 0.4 mm nozzle.` });
   // Whether there is a cavity at all: under a lid that hangs inside (`clearH`), the full height counts.
   const dims = [r.inner[0], r.inner[1], typeof r.clearH === 'number' ? r.clearH : r.inner[2]];
   if (dims.some((v) => v <= 0)) w.push({ level: 'error', text: 'Walls and floor are thicker than the box. Increase the size or reduce the thickness.' });
@@ -175,6 +177,12 @@ export function commonWarnings(p: BoxParams, r: Resolved): Warning[] {
 }
 
 export const fmt = (v: number) => (Math.round(v * 100) / 100).toString();
+
+/** Slack for threshold checks, so a value the app advised is never refused by rounding error. */
+export const EPS = 1e-6;
+
+/** `v` rounded up to the next `step` (for advice: "at least ..."). */
+export const ceilTo = (v: number, step: number) => Math.ceil(v / step - EPS) * step;
 
 /**
  * Cut a rectangular notch, `halfW` either side of the centre line and `depth` deep, into the straight

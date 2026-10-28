@@ -274,7 +274,11 @@ try {
   check((await page.inputValue('#param-width')) === '120', 'redo');
   await page.click('.segmented button:has-text("Inches")');
   check((await page.inputValue('#param-width')) === '4.724', 'inch display');
+  // Tabbing through fields without typing must not store the rounded inch values.
+  await page.focus('#param-width');
+  for (let i = 0; i < 4; i++) await page.keyboard.press('Tab');
   await page.click('.segmented button:has-text("Millimetres")');
+  check((await page.inputValue('#param-width')) === '120' && (await page.inputValue('#param-depth')) === '64', 'leaving inch fields untouched keeps the millimetres');
   await step(3);
   await page.fill('#param-lidHeight', '60');
   await page.press('#param-lidHeight', 'Enter');
