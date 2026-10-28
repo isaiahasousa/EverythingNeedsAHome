@@ -1,0 +1,12 @@
+# Response headers for Cloudflare (Pages, or Workers static assets) and Netlify.
+# The policy allows WebAssembly ('wasm-unsafe-eval') for the geometry engine, the geometry worker,
+# Google Fonts, and images people upload (data:/blob: URLs). Nothing else may load.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+
+# Hashed build output never changes, so browsers can keep it for a year.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

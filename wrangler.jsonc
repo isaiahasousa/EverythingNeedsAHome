@@ -1,0 +1,9 @@
+// Cloudflare deploy settings, used when the site is a Worker with static assets (the dashboard's
+// "Import a repository" flow). `npx wrangler deploy` builds the app and uploads dist/, so the dashboard
+// needs no build command or output folder. `name` must match the Worker's name in the dashboard.
+{
+  "name": "everythingneedsahome",
+  "compatibility_date": "2025-10-01",
+  "build": { "command": "npm run build" },
+  "assets": { "directory": "./dist" }
+}

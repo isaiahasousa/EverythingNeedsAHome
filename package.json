@@ -1,0 +1,42 @@
+{
+  "name": "everything-needs-a-home",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Parametric 3D-printable box generator with graphics, in the spirit of MakerCase.",
+  "type": "module",
+  "scripts": {
+    "fallback": "node scripts/make-fallback.mjs",
+    "dev": "node scripts/make-fallback.mjs && vite",
+    "build": "node scripts/make-fallback.mjs && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "node scripts/make-fallback.mjs && tsc --noEmit",
+    "build:artifact": "npm run build && node scripts/make-artifact.mjs",
+    "e2e": "node tests/e2e/smoke.mjs",
+    "verify:downloads": "node tests/verify-downloads.mjs"
+  },
+  "dependencies": {
+    "fflate": "0.8.2",
+    "manifold-3d": "3.5.4",
+    "opentype.js": "1.3.4",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/opentype.js": "^1.3.8",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@types/three": "0.186.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "binaryen": "^123.0.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "3.2.4",
+    "playwright": "1.63.0"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}
