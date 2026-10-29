@@ -61,7 +61,8 @@ export class Viewer {
   private theme: ViewerTheme = { edge: '#000', accent: '#c48a2c', plate: '#b8955a', plateLine: '#8d6d3a', shadow: '#000' };
   private view: ViewMode = 'assembled';
   private layout = new Map<string, Mat4>();
-  private anim: { start: number; dur: number; cam?: { p0: THREE.Vector3; p1: THREE.Vector3; t0: THREE.Vector3; t1: THREE.Vector3 } } | null = null;
+  /** Parts moving to their targets, and a camera move (`fit`: framing the parts, so it refits when they change). */
+  private anim: { start: number; dur: number; cam?: { p0: THREE.Vector3; p1: THREE.Vector3; t0: THREE.Vector3; t1: THREE.Vector3; fit?: boolean } } | null = null;
   private dirty = true;
   private raf = 0;
   private ro: ResizeObserver;
@@ -281,13 +282,18 @@ export class Viewer {
 
   private startAnim(fitCamera: boolean) {
     const dur = this.reduceMotion ? 1 : 520;
+    // A camera move still under way when the parts change (a rebuild landing during a view change) carries
+    // on from where the camera is now; one framing the parts frames the new ones.
+    const moving = this.anim?.cam && performance.now() - this.anim.start < this.anim.dur ? this.anim.cam : undefined;
     this.anim = { start: performance.now(), dur };
-    if (fitCamera) {
+    if (fitCamera || moving?.fit) {
       const box = this.targetBounds();
       if (!box.isEmpty()) {
         const { pos, target } = this.framing(box);
-        this.anim.cam = { p0: this.camera.position.clone(), p1: pos, t0: this.controls.target.clone(), t1: target };
+        this.anim.cam = { p0: this.camera.position.clone(), p1: pos, t0: this.controls.target.clone(), t1: target, fit: true };
       }
+    } else if (moving) {
+      this.anim.cam = { p0: this.camera.position.clone(), p1: moving.p1, t0: this.controls.target.clone(), t1: moving.t1 };
     }
     this.dirty = true;
   }
@@ -330,7 +336,7 @@ export class Viewer {
       this.dirty = true;
       return;
     }
-    this.anim = { start: performance.now(), dur: 450, cam: { p0: this.camera.position.clone(), p1: pos, t0: this.controls.target.clone(), t1: target } };
+    this.anim = { start: performance.now(), dur: 450, cam: { p0: this.camera.position.clone(), p1: pos, t0: this.controls.target.clone(), t1: target, fit: true } };
     for (const pv of this.parts.values()) pv.from = { p: pv.group.position.clone(), q: pv.group.quaternion.clone() };
   }
 

@@ -13,9 +13,10 @@ const DB_STORE = 'autosave';
 
 /**
  * Where the last autosave went: 'dropped-images' means only a copy without its images fitted;
- * 'paused' means saving is off because an existing save could not be read (it is kept untouched).
+ * 'paused' means saving is off because an existing save could not be read (it is kept untouched);
+ * 'superseded' means a newer save started first and this one stood aside.
  */
-export type SaveOutcome = 'local' | 'indexeddb' | 'dropped-images' | 'failed' | 'paused';
+export type SaveOutcome = 'local' | 'indexeddb' | 'dropped-images' | 'failed' | 'paused' | 'superseded';
 
 let paused = false;
 
@@ -31,33 +32,54 @@ interface Marker {
 
 const isMarker = (v: unknown): v is Marker => !!v && typeof v === 'object' && (v as Marker).storedIn === 'indexeddb';
 
+/**
+ * The IndexedDB connection, kept open once used: a save started while the page is closing must begin
+ * synchronously, and opening a connection never finishes in time.
+ */
+let connection: Promise<IDBDatabase> | null = null;
+let openConnection: IDBDatabase | null = null;
+
 function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    try {
-      const req = indexedDB.open(DB_NAME, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(DB_STORE);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-      req.onblocked = () => reject(new Error('IndexedDB is blocked'));
-    } catch (e) {
-      reject(e);
-    }
-  });
+  if (!connection) {
+    connection = new Promise<IDBDatabase>((resolve, reject) => {
+      try {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(DB_STORE);
+        req.onsuccess = () => {
+          const db = req.result;
+          const forget = () => {
+            if (openConnection === db) openConnection = null;
+            connection = null;
+          };
+          // Step aside for another tab that upgrades the database; the next save reconnects.
+          db.onversionchange = () => {
+            db.close();
+            forget();
+          };
+          db.onclose = forget;
+          openConnection = db;
+          resolve(db);
+        };
+        req.onerror = () => reject(req.error);
+        req.onblocked = () => reject(new Error('IndexedDB is blocked'));
+      } catch (e) {
+        reject(e);
+      }
+    });
+    connection.catch(() => (connection = null));
+  }
+  return connection;
 }
 
 async function idb<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await openDb();
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const tx = db.transaction(DB_STORE, mode);
-      const req = fn(tx.objectStore(DB_STORE));
-      tx.oncomplete = () => resolve(req.result);
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error ?? new Error('IndexedDB write aborted'));
-    });
-  } finally {
-    db.close();
-  }
+  return new Promise<T>((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, mode);
+    const req = fn(tx.objectStore(DB_STORE));
+    tx.oncomplete = () => resolve(req.result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB write aborted'));
+  });
 }
 
 /** The saved project JSON, if it fits in localStorage. Null when nothing is saved or it lives in IndexedDB. */
@@ -106,43 +128,84 @@ export async function readIndexedDb(): Promise<{ status: 'ok'; value: unknown } 
  * neither store takes the full project.
  */
 export function persist(project: unknown, slim: () => unknown): Promise<SaveOutcome> {
-  // One save at a time, in order: an older save finishing late must not overwrite a newer one.
-  const run = () => persistNow(project, slim);
+  // One save at a time, in order, and only the newest one writes: an older save finishing late must
+  // not overwrite a newer one.
+  const generation = ++latest;
+  const run = () => persistNow(project, slim, generation);
   const next = queue.then(run, run);
   queue = next.catch(() => 'failed' as const);
   return next;
 }
 
 let queue: Promise<SaveOutcome> = Promise.resolve('local');
+/** The newest save started; an older one still running leaves localStorage alone. */
+let latest = 0;
 
-async function persistNow(project: unknown, slim: () => unknown): Promise<SaveOutcome> {
+const writeMarker = () => {
+  const marker: Marker = { storedIn: 'indexeddb', savedAt: Date.now() };
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(marker));
+  } catch {
+    // Without the marker the next visit falls back to an older local copy; still better than nothing.
+  }
+};
+
+async function persistNow(project: unknown, slim: () => unknown, generation: number): Promise<SaveOutcome> {
   if (paused) return 'paused';
+  if (generation !== latest) return 'superseded';
   const json = JSON.stringify(project);
   const hadIndexedDbCopy = savedInIndexedDb();
   try {
     localStorage.setItem(STORAGE_KEY, json);
     // A full copy fits locally again; free the stale IndexedDB copy.
-    if (hadIndexedDbCopy) await idb('readwrite', (s) => s.delete(STORAGE_KEY)).catch(() => {});
+    if (hadIndexedDbCopy || openConnection) await idb('readwrite', (s) => s.delete(STORAGE_KEY)).catch(() => {});
     return 'local';
   } catch {
     // Over quota (or storage is blocked): try IndexedDB below.
   }
   try {
     await idb('readwrite', (s) => s.put(json, STORAGE_KEY));
-    const marker: Marker = { storedIn: 'indexeddb', savedAt: Date.now() };
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(marker));
-    } catch {
-      // Without the marker the next visit falls back to an older local copy; still better than nothing.
-    }
+    if (generation !== latest) return 'superseded';
+    writeMarker();
     return 'indexeddb';
   } catch {
     // IndexedDB unavailable too.
   }
+  if (generation !== latest) return 'superseded';
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(slim()));
     return 'dropped-images';
   } catch {
     return 'failed';
   }
+}
+
+/**
+ * Save while the page is being hidden, reloaded or closed. Nothing asynchronous finishes then, so the
+ * write starts in this call: localStorage, or for a project too big for it, the IndexedDB connection an
+ * earlier save or load opened. (With no connection open, a queued save is the best left to try.)
+ */
+export function persistBeforeUnload(project: unknown, slim: () => unknown) {
+  if (paused) return;
+  const generation = ++latest;
+  const json = JSON.stringify(project);
+  try {
+    localStorage.setItem(STORAGE_KEY, json);
+    return;
+  } catch {
+    // Over quota: IndexedDB below.
+  }
+  if (openConnection) {
+    try {
+      const tx = openConnection.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).put(json, STORAGE_KEY);
+      (tx as IDBTransaction & { commit?: () => void }).commit?.();
+      writeMarker();
+      return;
+    } catch {
+      // The connection closed; fall back to a queued save below.
+    }
+  }
+  const run = () => persistNow(project, slim, generation);
+  queue = queue.then(run, run).catch(() => 'failed' as const);
 }

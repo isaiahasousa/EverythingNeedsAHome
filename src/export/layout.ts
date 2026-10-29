@@ -31,23 +31,29 @@ export interface Layout {
 
 const GAP = 8;
 
-/** A body in print orientation, turned 90° about Z when only that way fits the bed. */
-function placeItem(p: PartMesh, bed: Printer) {
-  const w = p.printMax[0] - p.printMin[0], d = p.printMax[1] - p.printMin[1], h = p.printMax[2] - p.printMin[2];
-  const fits = (a: number, b: number) => a <= bed.w + 0.01 && b <= bed.d + 0.01;
-  if (!fits(w, d) && fits(d, w)) {
-    // Turning by +90° maps (x, y) to (-y, x).
-    return { p, w: d, d: w, h, minX: -p.printMax[1], minY: p.printMin[0], minZ: p.printMin[2], base: mulMat(rotZ(90), p.print) };
-  }
+const fitsBed = (w: number, d: number, bed: Printer) => w <= bed.w + 0.01 && d <= bed.d + 0.01;
+
+/** Footprint of a body in print orientation. */
+function footprint(p: PartMesh) {
+  return { w: p.printMax[0] - p.printMin[0], d: p.printMax[1] - p.printMin[1] };
+}
+
+/** A body in print orientation, turned 90° about Z or not. */
+function orient(p: PartMesh, turned: boolean) {
+  const { w, d } = footprint(p);
+  const h = p.printMax[2] - p.printMin[2];
+  // Turning by +90° maps (x, y) to (-y, x).
+  if (turned) return { p, w: d, d: w, h, minX: -p.printMax[1], minY: p.printMin[0], minZ: p.printMin[2], base: mulMat(rotZ(90), p.print) };
   return { p, w, d, h, minX: p.printMin[0], minY: p.printMin[1], minZ: p.printMin[2], base: p.print };
 }
 
-/** Shelf-pack the bodies on the bed in print orientation, centred, front row first. */
-export function layoutParts(parts: PartMesh[], bed: Printer): Layout {
-  const bodies = parts.filter((p) => p.role === 'body');
-  const items = bodies.map((p) => placeItem(p, bed)).sort((a, b) => b.d - a.d || b.w - a.w);
-  const rows: { items: typeof items; w: number; d: number }[] = [];
-  for (const it of items) {
+type Item = ReturnType<typeof orient>;
+
+/** Shelf-pack the bodies, deepest first: rows across the bed, front row first. */
+function pack(items: Item[], bed: Printer) {
+  const sorted = [...items].sort((a, b) => b.d - a.d || b.w - a.w);
+  const rows: { items: Item[]; w: number; d: number }[] = [];
+  for (const it of sorted) {
     const row = rows.find((r) => r.w + GAP + it.w <= bed.w);
     if (row && row.items.length) {
       row.items.push(it);
@@ -56,6 +62,27 @@ export function layoutParts(parts: PartMesh[], bed: Printer): Layout {
     } else rows.push({ items: [it], w: it.w, d: it.d });
   }
   const totalD = rows.reduce((s, r) => s + r.d, 0) + GAP * Math.max(0, rows.length - 1);
+  return { rows, totalD, fits: totalD <= bed.d + 0.01 && items.every((it) => fitsBed(it.w, it.d, bed)) };
+}
+
+/**
+ * Lay the bodies out on the bed in print orientation, centred. Each part is turned 90° only when that is
+ * the one way it fits; when the parts then do not fit together, every part turned, or all with their long
+ * sides the same way, often does.
+ */
+export function layoutParts(parts: PartMesh[], bed: Printer): Layout {
+  const bodies = parts.filter((p) => p.role === 'body');
+  const canTurn = (p: PartMesh) => fitsBed(footprint(p).d, footprint(p).w, bed);
+  const mustTurn = (p: PartMesh) => !fitsBed(footprint(p).w, footprint(p).d, bed) && canTurn(p);
+  const long = (p: PartMesh, alongX: boolean) => ((footprint(p).d > footprint(p).w) === alongX ? canTurn(p) : mustTurn(p));
+  const arrangements = [bodies.map(mustTurn), bodies.map(canTurn), bodies.map((p) => long(p, true)), bodies.map((p) => long(p, false))];
+  let packed = pack(bodies.map((p, i) => orient(p, arrangements[0][i])), bed);
+  for (const turns of arrangements.slice(1)) {
+    if (packed.fits) break;
+    const tried = pack(bodies.map((p, i) => orient(p, turns[i])), bed);
+    if (tried.fits) packed = tried;
+  }
+  const { rows, totalD } = packed;
   const matrices = new Map<string, Mat4>();
   const overflow: string[] = [];
   const tooTall: string[] = [];
@@ -65,7 +92,7 @@ export function layoutParts(parts: PartMesh[], bed: Printer): Layout {
     for (const it of row.items) {
       const t = translation(x - it.minX, y + (row.d - it.d) / 2 - it.minY, -it.minZ);
       matrices.set(it.p.id, mulMat(t, it.base));
-      if (it.w > bed.w + 0.01 || it.d > bed.d + 0.01) overflow.push(it.p.name);
+      if (!fitsBed(it.w, it.d, bed)) overflow.push(it.p.name);
       if (it.h > bed.h + 0.01) tooTall.push(it.p.name);
       x += it.w + GAP;
     }

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import type { BuildResult, Graphic } from '../core/types';
 import { registerSavedFonts } from '../graphics/text';
 import { pauseAutosave } from './persist';
-import { hasLargeSave, loadSaved, loadSavedAsync, sampleProject, saveLocal, type Project } from './project';
+import { hasLargeSave, loadSaved, loadSavedAsync, sampleProject, saveLocal, saveLocalNow, type Project } from './project';
 
 export type Step = 'type' | 'size' | 'details' | 'graphics' | 'export';
 export type ViewMode = 'assembled' | 'exploded' | 'print';
@@ -126,7 +126,7 @@ export function flushAutosave() {
   if (saveTimer === undefined) return;
   clearTimeout(saveTimer);
   saveTimer = undefined;
-  autosave(projectStore.get());
+  saveLocalNow(projectStore.get());
 }
 
 if (typeof window !== 'undefined') {
@@ -140,7 +140,7 @@ let autosaveNoticeShown = false;
 
 function autosave(p: Project) {
   void saveLocal(p).then((outcome) => {
-    if (autosaveNoticeShown || outcome === 'local' || outcome === 'indexeddb' || outcome === 'paused') return;
+    if (autosaveNoticeShown || outcome === 'local' || outcome === 'indexeddb' || outcome === 'paused' || outcome === 'superseded') return;
     autosaveNoticeShown = true;
     toast(
       outcome === 'dropped-images'

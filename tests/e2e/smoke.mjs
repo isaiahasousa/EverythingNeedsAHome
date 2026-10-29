@@ -352,6 +352,24 @@ try {
     await step(2, pg);
     await pg.waitForFunction(() => document.querySelector('#param-width')?.value === '144', null, { timeout: 5000 }).catch(() => {});
     check((await pg.inputValue('#param-width')) === '144', 'and autosave keeps working afterwards');
+    // An edit right before a reload, or before closing the tab, is saved even though it goes to IndexedDB.
+    await pg.fill('#param-width', '155');
+    await pg.press('#param-width', 'Enter');
+    await pg.reload({ waitUntil: 'networkidle' });
+    await settleOn(pg);
+    await step(2, pg);
+    await pg.waitForFunction(() => document.querySelector('#param-width')?.value === '155', null, { timeout: 5000 }).catch(() => {});
+    check((await pg.inputValue('#param-width')) === '155', 'a large project keeps an edit made right before a reload');
+    await pg.fill('#param-width', '166');
+    await pg.press('#param-width', 'Enter');
+    await pg.close();
+    const again = await ctx.newPage();
+    again.on('pageerror', (e) => consoleErrors.push(e.message));
+    await again.goto(url, { waitUntil: 'networkidle' });
+    await settleOn(again);
+    await step(2, again);
+    await again.waitForFunction(() => document.querySelector('#param-width')?.value === '166', null, { timeout: 5000 }).catch(() => {});
+    check((await again.inputValue('#param-width')) === '166', 'and one made right before the tab is closed');
     await ctx.close();
   }
 

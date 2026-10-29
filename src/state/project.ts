@@ -2,7 +2,7 @@ import { BOX_ORDER, DEFAULT_PARAMS, normalizeParams } from '../boxes';
 import { uid } from '../core/math';
 import type { BoxParams, BoxTypeId, Graphic, GraphicMode, GraphicSource } from '../core/types';
 import type { SavedFont } from '../graphics/text';
-import { persist, readIndexedDb, readLocal, savedInIndexedDb, type SaveOutcome } from './persist';
+import { persist, persistBeforeUnload, readIndexedDb, readLocal, savedInIndexedDb, type SaveOutcome } from './persist';
 
 export type Units = 'mm' | 'in';
 
@@ -196,6 +196,14 @@ export async function loadSavedAsync(): Promise<Project | 'missing' | 'error'> {
   return tryNormalize(r.value) ?? 'missing';
 }
 
+/** The project without its images, saved when nothing will take the full one. */
+const withoutImages = (p: Project) => () => ({ ...p, graphics: p.graphics.filter((g) => g.source.kind !== 'image') });
+
 export function saveLocal(p: Project): Promise<SaveOutcome> {
-  return persist(p, () => ({ ...p, graphics: p.graphics.filter((g) => g.source.kind !== 'image') }));
+  return persist(p, withoutImages(p));
+}
+
+/** Save at once, as the page is hidden or closed. */
+export function saveLocalNow(p: Project) {
+  persistBeforeUnload(p, withoutImages(p));
 }

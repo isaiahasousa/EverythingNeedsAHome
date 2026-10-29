@@ -40,12 +40,14 @@ use the corner handles to scale and the top handle to rotate (snaps to 15°; hol
 - **Effects:** raised, engraved, cut through, inlay (a pocket plus a matching fill part for a second filament
   colour), and lithophane (photo relief that shows the picture when backlit).
 - Graphics wrap around curved surfaces such as the jar body.
+- Graphics stack in the order you add them: a later one sits on, or cuts into, the ones before it. Raise a
+  name on a raised plate, or inlay white letters on a coloured disc.
 - Drop or paste an image anywhere in the app to add it to the current face.
 
 ## Exports
 
-- **3MF** with every part laid out on your printer's bed in print orientation. Inlays come in as parts of
-  a single multi-material object, ready for an AMS / MMU.
+- **3MF** with every part laid out on your printer's bed in print orientation, turned 90° when that is how
+  they fit. Inlays come in as parts of a single multi-material object, ready for an AMS / MMU.
 - **STL** per part, or all parts in a ZIP.
 - **Project files** (`.project.json`) to save and reopen designs, including any fonts you uploaded. Work is
   also autosaved in the browser (projects too big for its usual storage, such as ones with large photos,

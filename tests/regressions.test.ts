@@ -855,3 +855,165 @@ describe('review round 7', () => {
     expect(layoutParts([part('Huge', 260, 260)], bed).overflow).toEqual(['Huge']);
   });
 });
+
+describe('review round 8', () => {
+  const gfx = (over: Partial<Graphic>): Graphic => ({
+    id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'rect', sides: 5, ratio: 0.45, corner: 0 }, x: 0, y: 0, w: 30, h: 20,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'inlay', depth: 0.6, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+  });
+  const shape = (s: 'rect' | 'circle' | 'star' | 'plus', over: Partial<Graphic>, ratio = 0.45, corner = 0) =>
+    placeGraphic(gfx({ source: { kind: 'shape', shape: s, sides: 5, ratio, corner }, ...over }), builtinShape(s, 5, ratio, corner));
+  /** The rounded shapes of the random sweeps these cases came from. */
+  const swept = (s: 'rect' | 'circle' | 'star' | 'plus', over: Partial<Graphic>) => shape(s, over, 0.5, 0.1);
+  const totalFill = (out: { inlays: Record<string, { solid: Manifold }> }) => Object.values(out.inlays).reduce((s, i) => s + i.solid.volume(), 0);
+  /** Material in a 0.2 mm cube at face point (u, v, w), w measured out from the face. */
+  const solidAt = (m: Manifold, face: FaceDef, u: number, v: number, w: number) =>
+    overlap(m, transformed(box(u - 0.1, u + 0.1, v - 0.1, v + 0.1, w - 0.1, w + 0.1), frameMatrix(face.u, face.v, face.n, face.origin))) > 0.004;
+
+  it('a later inlay over an earlier inlay or engraving colours its whole pocket', () => {
+    const s = setup('tray');
+    const faces = s.faces();
+    const solids = s.build();
+    const removed = (out: ReturnType<typeof applyGraphics>) => solids.base.volume() - out.solids.base.volume();
+    for (const color of ['#00ff00', '#ff0000']) {
+      const two = applyGraphics(solids, faces, [shape('rect', {}), shape('rect', { id: 'g2', x: 10, color })]);
+      // Two 30 x 20 mm pockets 0.6 mm deep, overlapping by 20 x 20 mm.
+      expect(removed(two)).toBeCloseTo(480, 0);
+      expect(totalFill(two), color).toBeCloseTo(480, 0);
+    }
+    const engraved = applyGraphics(solids, faces, [shape('rect', { mode: 'deboss', depth: 0.5, x: 10 }), shape('rect', {})]);
+    expect(totalFill(engraved)).toBeCloseTo(360, 0);
+    // White letters inlaid on a red disc keep their colour.
+    const letters = shape('star', { id: 'g2', w: 16, h: 16, color: '#ffffff' });
+    const badge = applyGraphics(solids, faces, [shape('circle', { w: 40, h: 30, depth: 0.8 }), letters]);
+    const alone = applyGraphics(solids, faces, [letters]).inlays['base::#ffffff'].solid.volume();
+    expect(badge.inlays['base::#ffffff'].solid.volume()).toBeCloseTo(alone, 1);
+    expect(totalFill(badge)).toBeCloseTo(removed(badge), 0);
+  });
+
+  it('raised graphics stand on a raised graphic under them', () => {
+    const s = setup('tray');
+    const faces = s.faces();
+    const front = faces.find((f) => f.id === 'front')!;
+    const solids = s.build();
+    const plaque = shape('rect', { mode: 'emboss', depth: 2, w: 50, h: 20 });
+    const star = shape('star', { id: 'g2', mode: 'emboss', depth: 1, w: 12, h: 12 });
+    const onWall = applyGraphics(solids, faces, [star]).solids.base.volume() - solids.base.volume();
+    const plain = applyGraphics(solids, faces, [plaque]).solids.base.volume();
+    const both = applyGraphics(solids, faces, [plaque, star]);
+    expect(both.solids.base.volume() - plain).toBeCloseTo(onWall, 0);
+    expect(solidAt(both.solids.base, front, 0, 0, 2.5)).toBe(true);
+    expect(solidAt(both.solids.base, front, 0, 0, 3.2)).toBe(false);
+    // Limits on how far graphics stand proud count the plaque too.
+    const bin = setup('gridfinity', { gfLabel: false });
+    const proud = (n: number) =>
+      applyGraphics(bin.build(), bin.faces(), [...Array(n)].map((_, i) => shape('rect', { id: `p${i}`, mode: 'emboss', depth: 0.2, w: 20 - 5 * i, h: 8 }))).warnings.some((w) => /stand 0\.4 mm proud/.test(w.text));
+    expect(proud(1)).toBe(false);
+    expect(proud(2)).toBe(true);
+  });
+
+  it('a deep mark on a plaque warns about the wall only when it really goes through', () => {
+    const s = setup('tray');
+    const faces = s.faces();
+    const t = faces.find((f) => f.id === 'front')!.thickness;
+    const solids = s.build();
+    const plaque = shape('rect', { mode: 'emboss', depth: 2, w: 50, h: 20 });
+    const through = (onPlaque: boolean, mode: Graphic['mode'], depth: number) =>
+      applyGraphics(solids, faces, [...(onPlaque ? [plaque] : []), shape('circle', { id: 'g2', mode, depth, w: 10, h: 10 })]).warnings.some((w) => /through the/.test(w.text));
+    for (const mode of ['deboss', 'inlay'] as const) {
+      expect(through(true, mode, t + 1), mode).toBe(false);
+      expect(through(true, mode, t + 2), mode).toBe(true);
+      expect(through(false, mode, t), mode).toBe(true);
+    }
+  });
+
+  it('a lithophane or cut-through takes the plaque under it away', () => {
+    const s = setup('tray');
+    const faces = s.faces();
+    const solids = s.build();
+    const plaque = shape('rect', { mode: 'emboss', depth: 2, w: 50, h: 24 });
+    const photo = placeGraphic(gfx({ id: 'l', mode: 'lithophane', w: 20, h: 14 }), builtinShape('rect', 4, 0.5, 0));
+    const pw = 24, ph = 12;
+    photo.litho = { pixels: Uint8Array.from({ length: pw * ph }, (_, i) => (i % pw) * 10), pw, ph, min: 0.8, max: 2 };
+    // An inlay on the photo counts its depth from the photo's surface, where the plaque was.
+    const dot = shape('circle', { id: 'g2', w: 6, h: 6, depth: 0.6 });
+    const out = applyGraphics(solids, faces, [plaque, photo, dot]);
+    expect(Object.values(out.inlays)[0].solid.volume()).toBeCloseTo(Math.PI * 9 * 0.6, 0);
+    // A raised dot on a cut-through plaque stands on the wall, not on the plaque that was cut away.
+    const ring = shape('circle', { id: 'c', mode: 'cut', w: 12, h: 12 });
+    const bump = shape('circle', { id: 'g3', mode: 'emboss', depth: 1, w: 16, h: 16 });
+    const front = faces.find((f) => f.id === 'front')!;
+    const cut = applyGraphics(solids, faces, [plaque, ring, bump]);
+    expect(solidAt(cut.solids.base, front, 7.5, 0, 0.5)).toBe(true);
+    expect(solidAt(cut.solids.base, front, 7.5, 0, 2.5)).toBe(true);
+    expect(solidAt(cut.solids.base, front, 0, 0, 1.5)).toBe(false);
+  });
+
+  it('colour stays inside the part where a mark crosses the edges of stacked plaques', () => {
+    const s = setup('hinged');
+    const faces = s.faces();
+    const solids = s.build();
+    const plaques = [
+      swept('circle', { faceId: 'bottom', mode: 'emboss', depth: 2.71, w: 36.89, h: 34.41, x: -15.71, y: 1.55 }),
+      swept('star', { id: 'g2', faceId: 'bottom', mode: 'emboss', depth: 2.51, w: 18.91, h: 44.48, x: 4.01, y: -9.49 }),
+    ];
+    const mark = swept('plus', { id: 'g3', faceId: 'bottom', depth: 1.06, w: 25.32, h: 9.21, x: 5.97, y: 0.92 });
+    const envelope = applyGraphics(solids, faces, plaques).solids.base;
+    const out = applyGraphics(solids, faces, [...plaques, mark]);
+    const fill = Object.values(out.inlays)[0].solid;
+    expect(fill.subtract(envelope).volume()).toBeLessThan(0.01);
+    // ...and fills its whole pocket.
+    expect(envelope.subtract(out.solids.base).subtract(fill).volume()).toBeLessThan(0.05);
+  });
+
+  it('colour and body stay apart even when the part was not evaluated before the graphics', () => {
+    const s = setup('jar', { width: 104, depth: 75, height: 36, wall: 1.2 });
+    const faces = s.faces();
+    const on = (shp: 'rect' | 'star' | 'circle', over: Partial<Graphic>) => swept(shp, { faceId: 'bottom', ...over });
+    const out = applyGraphics(s.build(), faces, [
+      on('star', { mode: 'emboss', depth: 2.96, w: 37.13, h: 52.56, x: 6.95, y: -12.72, rotation: -18 }),
+      on('rect', { id: 'g2', mode: 'emboss', depth: 0.46, w: 26.93, h: 50.92, x: 16.07, y: 9.76 }),
+      on('rect', { id: 'g3', depth: 1.28, w: 23.77, h: 16.24, x: 24.24, y: 10.74 }),
+    ]);
+    const fill = Object.values(out.inlays)[0].solid;
+    expect(overlap(fill, out.solids.jar)).toBeLessThan(0.05);
+    expect(fill.volume() - fill.subtract(out.solids.jar).volume()).toBeLessThan(0.05);
+  });
+
+  it('inlay colour on the jar fills its pocket up to the curved wall where a mark crosses a plaque edge', () => {
+    const s = setup('jar');
+    const faces = s.faces();
+    const solids = s.build();
+    const plaque = shape('rect', { mode: 'emboss', depth: 1.5, w: 40, h: 20, x: -15 });
+    for (const mark of [shape('rect', { id: 'g2', w: 30, h: 10, x: 10 }), shape('star', { id: 'g2', w: 24, h: 16, x: 8 })]) {
+      const envelope = applyGraphics(solids, faces, [plaque]).solids.jar;
+      const out = applyGraphics(solids, faces, [plaque, mark]);
+      const fill = Object.values(out.inlays)[0].solid;
+      expect(envelope.subtract(out.solids.jar).subtract(fill).volume()).toBeLessThan(0.05);
+      expect(fill.subtract(envelope).volume()).toBeLessThan(0.05);
+    }
+  });
+
+  it('parts that fit the bed side by side only when all are turned are turned', () => {
+    const bed = PRINTERS.find((b) => b.id === 'bed250')!;
+    const part = (id: string, w: number, d: number) =>
+      ({ id, name: id, role: 'body', print: IDENTITY, printMin: [-w / 2, -d / 2, 0], printMax: [w / 2, d / 2, 30] }) as unknown as PartMesh;
+    const parts = [part('Box', 200, 120), part('Lid', 200, 120)];
+    const L = layoutParts(parts, bed);
+    expect(L.overflow).toEqual([]);
+    const spans = parts.map((p) => {
+      const m = L.matrices.get(p.id)!;
+      const xs: number[] = [], ys: number[] = [];
+      for (let k = 0; k < 4; k++) {
+        const [x, y] = applyMat(m, [k & 1 ? p.printMax[0] : p.printMin[0], k & 2 ? p.printMax[1] : p.printMin[1], 0]);
+        expect(Math.abs(x)).toBeLessThanOrEqual(bed.w / 2 + 0.01);
+        expect(Math.abs(y)).toBeLessThanOrEqual(bed.d / 2 + 0.01);
+        xs.push(x);
+        ys.push(y);
+      }
+      return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+    });
+    const [a, b] = spans;
+    expect(a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0).toBe(true);
+  });
+});

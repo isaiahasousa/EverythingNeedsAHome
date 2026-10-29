@@ -50,6 +50,49 @@ function slab(cs: CrossSection, w0: number, w1: number): Manifold {
   return cs.extrude(w1 - w0).translate([0, 0, w0]);
 }
 
+/** Part of a graphic's outline and the height of the surface under it (0 is the wall, more is a raised graphic). */
+type Region = { cs: CrossSection; h: number };
+
+/** Stacked slabs overlap this much (mm), so slabs placed on a face one by one always fuse. */
+const SEAM = 0.05;
+
+const outlineOf = (regions: Region[]) => (regions.length === 1 ? regions[0].cs : K().CrossSection.union(regions.map((r) => r.cs)));
+
+/**
+ * Join slabs placed on a face one at a time: a single slab refines evenly and follows a curved face
+ * closely, where a union refined as a whole keeps long edges whose chords sag below the surface.
+ */
+const placeSlabs = (face: FaceDef, slabs: [CrossSection, number, number][]) =>
+  unionAll(slabs.map(([cs, w0, w1]) => placeOnFace(slab(cs, w0, w1), face)));
+
+/** A pocket `d` deep into the surface under each region, open up to `top`. */
+function pocketSolid(face: FaceDef, regions: Region[], d: number, top: number): Manifold {
+  const levels = [...new Set(regions.map((r) => r.h))].sort((a, b) => b - a);
+  const slabs: [CrossSection, number, number][] = [];
+  let upTo = top;
+  // The highest surface first: its slab spans the whole mark, and each lower one reaches deeper under
+  // less of it, so each slab overlaps a wider one above.
+  for (const h of levels) {
+    slabs.push([outlineOf(regions.filter((r) => r.h <= h)), h - d, upTo]);
+    upTo = h - d + SEAM;
+  }
+  return placeSlabs(face, slabs);
+}
+
+/** A raised graphic standing `depth` above the surface under each region, from just inside the wall. */
+function raisedSolid(face: FaceDef, regions: Region[], depth: number): Manifold {
+  const levels = [...new Set(regions.map((r) => r.h))].sort((a, b) => a - b);
+  const slabs: [CrossSection, number, number][] = [];
+  let from = -OVERLAP;
+  // The lowest surface first: its slab spans the whole graphic, and each higher one stands taller over
+  // less of it (the part under it is inside the raised graphic below).
+  for (const h of levels) {
+    slabs.push([outlineOf(regions.filter((r) => r.h >= h)), from, h + depth]);
+    from = h + depth - SEAM;
+  }
+  return placeSlabs(face, slabs);
+}
+
 function rectCS(w: number, h: number, x: number, y: number, rot: number): CrossSection {
   return K().CrossSection.square([w, h], true).rotate(rot).translate([x, y]);
 }
@@ -114,29 +157,44 @@ export function applyGraphics(
   graphics: PlacedGraphic[],
   prints: Record<string, Mat4> = {},
 ): GraphicsOutcome {
+  // Evaluate each part once up front (a build has already done so). Otherwise the part and its envelope
+  // below would each evaluate their own mesh of it, and two meshes of one shape disagree where faces meet.
+  for (const m of Object.values(solids)) m.status();
   const out: GraphicsOutcome = { solids: { ...solids }, inlays: {}, colorIds: new Map(), warnings: [] };
   const faceById = new Map(faces.map((f) => [f.id, f]));
   /** Face labels with graphics, per part, for the loose-piece warning. */
   const touched = new Map<string, Set<string>>();
-  /** Cut-through cutters per part: inlay fills never plug them. */
-  const cuts = new Map<string, Manifold[]>();
   /** Raised graphics so far on each face (outline and height): later marks go through and sit on them. */
-  const raisedOn = new Map<string, { cs: CrossSection; h: number }[]>();
-  /**
-   * A mark's solid measured from the surface under it, the wall or a raised graphic: depth `d` below that
-   * surface, up to `upTo(surface height)`.
-   */
-  const marked = (faceId: string, cs: CrossSection, d: number, upTo: (h: number) => number) => {
+  const raisedOn = new Map<string, Region[]>();
+  /** The parts of an outline over each surface height on a face: the wall (0) or a raised graphic on it. */
+  const regionsOn = (faceId: string, cs: CrossSection) => {
     let rest = cs;
-    const pieces: Manifold[] = [];
+    const regions: Region[] = [];
     for (const r of [...(raisedOn.get(faceId) ?? [])].sort((a, b) => b.h - a.h)) {
       const on = rest.intersect(r.cs);
       if (on.isEmpty()) continue;
-      pieces.push(slab(on, r.h - d, upTo(r.h)));
+      regions.push({ cs: on, h: r.h });
       rest = rest.subtract(r.cs);
     }
-    pieces.push(slab(rest, -d, upTo(0)));
-    return unionAll(pieces);
+    if (!rest.isEmpty()) regions.push({ cs: rest, h: 0 });
+    return regions;
+  };
+  /** A cut-through or lithophane takes out the raised graphics in its outline. */
+  const clearRaised = (faceId: string, cs: CrossSection) => {
+    const list = raisedOn.get(faceId);
+    if (list) raisedOn.set(faceId, list.map((r) => ({ cs: r.cs.subtract(cs), h: r.h })).filter((r) => !r.cs.isEmpty()));
+  };
+  /**
+   * Each part as designed, with the raised graphics, cut-throughs and lithophanes so far but not the
+   * pockets: an inlay's colour fills all the material its pocket takes out, so it paints over earlier marks.
+   * Until a part has a pocket it is the part itself, mesh for mesh.
+   */
+  const envelope = new Map<string, Manifold>();
+  const envelopeOf = (partId: string) => envelope.get(partId) ?? solids[partId];
+  /** Record a step that changes the envelope too: `base` was the part before it, `step` makes the new one. */
+  const grow = (partId: string, base: Manifold, step: (m: Manifold) => Manifold) => {
+    const env = envelopeOf(partId);
+    envelope.set(partId, env === base ? out.solids[partId] : step(env));
   };
   /** Each part's convex hull: lithophanes never reach outside the part. */
   const hulls = new Map<string, Manifold>();
@@ -144,9 +202,13 @@ export function applyGraphics(
     if (!hulls.has(partId)) hulls.set(partId, solids[partId].hull());
     return hulls.get(partId)!;
   };
-  /** A later engraving or cut also takes the colour out of earlier inlays on that part. */
-  const clearFills = (partId: string, cutter: Manifold) => {
-    for (const inl of Object.values(out.inlays)) if (inl.partId === partId) inl.solid = inl.solid.subtract(cutter);
+  /**
+   * A later graphic paints over earlier ones: what it adds to the part or takes out of it is no longer an
+   * earlier inlay's colour. (Clearing each step's own solid keeps colour and body apart without subtracting
+   * the finished body, whose faces the colour shares; that boolean can leave slivers outside the part.)
+   */
+  const clearFills = (partId: string, solid: Manifold) => {
+    for (const inl of Object.values(out.inlays)) if (inl.partId === partId) inl.solid = inl.solid.subtract(solid);
   };
   /**
    * Keep a step's result only if it is a valid, non-empty solid that lost no more than the cutter could
@@ -219,7 +281,10 @@ export function applyGraphics(
         const placed = placeOnFace(clipped, face).intersect(hullOf(face.partId)).asOriginal();
         out.colorIds.set(placed.originalID(), g.color);
         if (!commit(face.partId, base, unionAll([base.subtract(hole), placed]), hole.volume(), label)) continue;
-        clearFills(face.partId, hole);
+        grow(face.partId, base, (m) => unionAll([m.subtract(hole), placed]));
+        // The relief replaces everything in its window, the hole and the wall it fuses with.
+        clearFills(face.partId, placeOnFace(slab(window, -(Math.max(face.thickness, fitted.litho!.max) + OVERLAP), top), face));
+        clearRaised(face.id, holeWindow);
         const inward = fitted.litho!.max - face.thickness;
         if (inward > 2 + 1e-6 && sideways(face))
           out.warnings.push({
@@ -239,11 +304,16 @@ export function applyGraphics(
         continue;
       }
       const depth = Math.max(0.05, g.depth);
+      // Heights and depths count from the surface under the graphic, so one on a raised plaque sits on it.
+      const regions = regionsOn(face.id, cs);
       if (g.mode === 'emboss') {
-        const solid = placeOnFace(slab(cs, -OVERLAP, depth), face).asOriginal();
+        const solid = raisedSolid(face, regions, depth).asOriginal();
         out.colorIds.set(solid.originalID(), g.color);
         if (!commit(face.partId, base, base.add(solid), 0, label)) continue;
-        raisedOn.set(face.id, [...(raisedOn.get(face.id) ?? []), { cs, h: depth }]);
+        grow(face.partId, base, (m) => m.add(solid));
+        clearFills(face.partId, solid);
+        raisedOn.set(face.id, [...(raisedOn.get(face.id) ?? []), ...regions.map((r) => ({ cs: r.cs, h: r.h + depth }))]);
+        const proud = Math.max(...regions.map((r) => r.h)) + depth;
         if (face.onBed) out.warnings.push({ scope: 'graphics', level: 'warn', text: `Raised graphics on ${label} face the print bed. Use Deboss or Inlay there, or print with supports.` });
         // On a face that prints sideways, a raised graphic's underside is a flat overhang as deep as it is tall.
         if (sideways(face) && depth > 2 + 1e-6)
@@ -252,19 +322,17 @@ export function applyGraphics(
             level: 'warn',
             text: `Raised graphics on ${label} stand ${mm(depth)} mm proud. Printed on its side, a raise over 2 mm leaves an overhang underneath that needs supports. Lower them to 2 mm or use Engraved.`,
           });
-        if (face.raiseLimit && depth > face.raiseLimit.max + 1e-6)
+        if (face.raiseLimit && proud > face.raiseLimit.max + 1e-6)
           out.warnings.push({
             scope: 'graphics',
             level: 'warn',
-            text: `Raised graphics on ${label} stand ${mm(depth)} mm proud. Above ${mm(face.raiseLimit.max)} mm, ${face.raiseLimit.why}. Lower them or use Engraved.`,
+            text: `Raised graphics on ${label} stand ${mm(proud)} mm proud. Above ${mm(face.raiseLimit.max)} mm, ${face.raiseLimit.why}. Lower them or use Engraved.`,
           });
       } else if (g.mode === 'deboss' || g.mode === 'inlay') {
-        const d = depth;
-        // Depth counts from the surface under the mark, so a mark on a raised plaque sits in the plaque.
-        const cutter = placeOnFace(marked(face.id, cs, d, () => top), face).asOriginal();
+        const cutter = pocketSolid(face, regions, depth, top).asOriginal();
         out.colorIds.set(cutter.originalID(), g.color);
         if (!commit(face.partId, base, base.subtract(cutter), cutter.volume(), label)) continue;
-        if (depth >= face.thickness)
+        if (regions.some((r) => r.cs.area() >= 0.01 && depth - r.h >= face.thickness))
           out.warnings.push({
             scope: 'graphics',
             level: 'warn',
@@ -274,8 +342,9 @@ export function applyGraphics(
         clearFills(face.partId, cutter);
         if (g.mode === 'inlay') {
           const key = `${face.partId}::${g.color.toLowerCase()}`;
-          // The colour fills the pocket up to the surface it was cut from, and only where there was material.
-          const fill = placeOnFace(marked(face.id, cs, d, (h) => h), face).intersect(base);
+          // The colour is the material the pocket took out, earlier marks included: flush with the surface
+          // around it, and flush inside a wall it goes through.
+          const fill = cutter.intersect(envelopeOf(face.partId));
           const prev = out.inlays[key];
           out.inlays[key] = { partId: face.partId, color: g.color, solid: prev ? prev.solid.add(fill) : fill };
         }
@@ -283,23 +352,16 @@ export function applyGraphics(
         const cutter = placeOnFace(slab(cs, -(face.thickness + OVERLAP), top), face).asOriginal();
         out.colorIds.set(cutter.originalID(), g.color);
         if (!commit(face.partId, base, base.subtract(cutter), cutter.volume(), label)) continue;
-        if (!cuts.has(face.partId)) cuts.set(face.partId, []);
-        cuts.get(face.partId)!.push(cutter);
+        grow(face.partId, base, (m) => m.subtract(cutter));
+        clearFills(face.partId, cutter);
+        clearRaised(face.id, cs);
       }
     } catch (err) {
       out.warnings.push({ scope: 'graphics', level: 'warn', text: `A graphic on ${label} could not be applied (${(err as Error).message}).` });
     }
   }
   for (const [partId, labels] of touched) tidyPart(out, partId, solids[partId], [...labels]);
-  // Inlay fills only fill what is left of their pockets: never a through-cut, never the body.
-  for (const inl of Object.values(out.inlays)) {
-    // Each fill was clipped to the part when its pocket was cut (so an inlay deeper than the wall stops
-    // flush inside); now take out whatever later graphics put back or cut through.
-    let fill = inl.solid.subtract(out.solids[inl.partId]);
-    const through = cuts.get(inl.partId);
-    if (through?.length) fill = fill.subtract(unionAll(through));
-    inl.solid = dropSlivers(fill);
-  }
+  for (const inl of Object.values(out.inlays)) inl.solid = dropSlivers(inl.solid);
   if (orphans)
     out.warnings.push({
       scope: 'graphics',
@@ -339,6 +401,7 @@ function tidyPart(out: GraphicsOutcome, partId: string, before: Manifold, labels
   const solidCount = kept.filter((m) => m.volume() > 0).length;
   if (solidCount === 0) {
     out.solids[partId] = before;
+    for (const [key, inl] of Object.entries(out.inlays)) if (inl.partId === partId) delete out.inlays[key];
     out.warnings.push({ scope: 'graphics', level: 'warn', text: `Graphics on ${labels.join(', ')} could not be applied with these settings, so they were left out.` });
     return;
   }
