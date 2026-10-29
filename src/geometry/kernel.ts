@@ -166,6 +166,30 @@ export function empty(): Manifold {
   return emptySolid();
 }
 
+/** The same solid with its faces turned inside out: a sealed void from `decompose` becomes the solid filling it. */
+function insideOut(m: Manifold): Manifold {
+  const mesh = m.getMesh();
+  const t = mesh.triVerts;
+  for (let i = 0; i < t.length; i += 3) [t[i + 1], t[i + 2]] = [t[i + 2], t[i + 1]];
+  return K().Manifold.ofMesh(mesh);
+}
+
+/**
+ * `m` with only those of its `pieces` (from `decompose`) that `keep` accepts: solids, and sealed voids, which
+ * come back with negative volume. It is rebuilt from the kept solids with the kept voids cut back out:
+ * composing the pieces would fill the voids in, and subtracting a piece of `m` from it leaves
+ * zero-thickness shells behind.
+ */
+export function keepPieces(m: Manifold, pieces: Manifold[], keep: (volume: number, piece: Manifold) => boolean): Manifold {
+  const kept = pieces.filter((p) => keep(p.volume(), p));
+  if (kept.length === pieces.length) return m;
+  const solids = kept.filter((p) => p.volume() > 0);
+  const voids = kept.filter((p) => p.volume() < 0);
+  if (!solids.length) return emptySolid();
+  const body = K().Manifold.compose(solids);
+  return voids.length ? body.subtract(K().Manifold.compose(voids.map(insideOut))) : body;
+}
+
 /**
  * Loft between rounded rectangles stacked along Z. Each level insets the outline by `inset` (mm) at height `z`.
  * Vertex correspondence is exact, so 45-degree chamfers (e.g. Gridfinity profiles) come out clean.

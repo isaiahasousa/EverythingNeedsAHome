@@ -44,6 +44,11 @@ function createStore<T>(initial: T) {
 }
 
 export const projectStore = createStore<Project>(loadSaved() ?? sampleProject());
+/**
+ * The project as it was last saved, or as the app opened it: nothing needs saving while it is still the
+ * current one. (A page left untouched must never write over a save another tab made.)
+ */
+let savedProject = projectStore.get();
 // Uploaded fonts travel inside the project: make them available before anything draws its text.
 registerSavedFonts(projectStore.get().fonts);
 projectStore.subscribe(() => registerSavedFonts(projectStore.get().fonts));
@@ -63,7 +68,10 @@ export async function loadLargeSave(): Promise<void> {
     // Leave the saved copy alone until a reload can read it.
     pauseAutosave();
     toast('Your last project could not be read from this browser’s storage, so autosave is paused to keep it safe. Reload to try again.', 'warn');
-  } else projectStore.set(p);
+  } else {
+    projectStore.set(p);
+    savedProject = p;
+  }
 }
 export const uiStore = createStore<UIState>({
   step: 'type',
@@ -121,12 +129,17 @@ export function update(fn: (p: Project) => Project, key = '') {
   }, 400);
 }
 
-/** Save at once if an autosave is still waiting (the page is being hidden, reloaded or closed). */
+/**
+ * Save at once if the project changed since the last save finished (the page is being hidden, reloaded
+ * or closed): an edit still waiting for its autosave, an undo, or a save still under way.
+ */
 export function flushAutosave() {
-  if (saveTimer === undefined) return;
   clearTimeout(saveTimer);
   saveTimer = undefined;
-  saveLocalNow(projectStore.get());
+  const p = projectStore.get();
+  if (p === savedProject) return;
+  saveLocalNow(p);
+  savedProject = p;
 }
 
 if (typeof window !== 'undefined') {
@@ -140,6 +153,7 @@ let autosaveNoticeShown = false;
 
 function autosave(p: Project) {
   void saveLocal(p).then((outcome) => {
+    if (outcome === 'local' || outcome === 'indexeddb') savedProject = p;
     if (autosaveNoticeShown || outcome === 'local' || outcome === 'indexeddb' || outcome === 'paused' || outcome === 'superseded') return;
     autosaveNoticeShown = true;
     toast(

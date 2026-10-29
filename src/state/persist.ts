@@ -71,11 +71,17 @@ function openDb(): Promise<IDBDatabase> {
   return connection;
 }
 
-async function idb<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+/**
+ * Run one request in its own transaction, committed as soon as it is done (a page closing can't wait).
+ * `wanted` is asked once the connection is open, right before the transaction starts.
+ */
+async function idb<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>, wanted = () => true): Promise<T | undefined> {
   const db = await openDb();
+  if (!wanted()) return undefined;
   return new Promise<T>((resolve, reject) => {
     const tx = db.transaction(DB_STORE, mode);
     const req = fn(tx.objectStore(DB_STORE));
+    (tx as IDBTransaction & { commit?: () => void }).commit?.();
     tx.oncomplete = () => resolve(req.result);
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB write aborted'));
@@ -138,8 +144,13 @@ export function persist(project: unknown, slim: () => unknown): Promise<SaveOutc
 }
 
 let queue: Promise<SaveOutcome> = Promise.resolve('local');
-/** The newest save started; an older one still running leaves localStorage alone. */
+/** The newest save asked for: an older one still waiting to run stands aside. */
 let latest = 0;
+/**
+ * The newest save whose copy has landed. An older save finishing later must not point localStorage at
+ * IndexedDB, or delete the IndexedDB copy, over it.
+ */
+let finished = 0;
 
 const writeMarker = () => {
   const marker: Marker = { storedIn: 'indexeddb', savedAt: Date.now() };
@@ -157,23 +168,28 @@ async function persistNow(project: unknown, slim: () => unknown, generation: num
   const hadIndexedDbCopy = savedInIndexedDb();
   try {
     localStorage.setItem(STORAGE_KEY, json);
-    // A full copy fits locally again; free the stale IndexedDB copy.
-    if (hadIndexedDbCopy || openConnection) await idb('readwrite', (s) => s.delete(STORAGE_KEY)).catch(() => {});
+    finished = generation;
+    // A full copy fits locally again; free the stale IndexedDB copy, unless a newer save is under way.
+    if (hadIndexedDbCopy || openConnection) await idb('readwrite', (s) => s.delete(STORAGE_KEY), () => generation === latest).catch(() => {});
     return 'local';
   } catch {
     // Over quota (or storage is blocked): try IndexedDB below.
   }
   try {
     await idb('readwrite', (s) => s.put(json, STORAGE_KEY));
-    if (generation !== latest) return 'superseded';
+    // Point localStorage at the copy, even if a newer save is waiting: until that one lands this is the
+    // newest copy there is.
+    if (finished > generation) return 'superseded';
     writeMarker();
+    finished = generation;
     return 'indexeddb';
   } catch {
     // IndexedDB unavailable too.
   }
-  if (generation !== latest) return 'superseded';
+  if (finished > generation) return 'superseded';
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(slim()));
+    finished = generation;
     return 'dropped-images';
   } catch {
     return 'failed';
@@ -191,16 +207,19 @@ export function persistBeforeUnload(project: unknown, slim: () => unknown) {
   const json = JSON.stringify(project);
   try {
     localStorage.setItem(STORAGE_KEY, json);
+    finished = generation;
     return;
   } catch {
     // Over quota: IndexedDB below.
   }
   if (openConnection) {
     try {
+      // Transactions run in the order they are made, so this lands after any earlier save's.
       const tx = openConnection.transaction(DB_STORE, 'readwrite');
       tx.objectStore(DB_STORE).put(json, STORAGE_KEY);
       (tx as IDBTransaction & { commit?: () => void }).commit?.();
       writeMarker();
+      finished = generation;
       return;
     } catch {
       // The connection closed; fall back to a queued save below.

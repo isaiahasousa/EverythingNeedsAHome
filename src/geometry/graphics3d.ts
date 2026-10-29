@@ -3,7 +3,7 @@
 import type { CrossSection, Manifold } from 'manifold-3d';
 import { applyMatDir, frameMatrix } from '../core/math';
 import type { FaceDef, Mat4, PlacedGraphic, Vec2, Vec3, Warning } from '../core/types';
-import { emptySolid, K, poly, transformed, unionAll } from './kernel';
+import { emptySolid, K, keepPieces, poly, transformed, unionAll } from './kernel';
 
 const OVERLAP = 0.3;
 
@@ -185,6 +185,22 @@ export function applyGraphics(
     if (list) raisedOn.set(faceId, list.map((r) => ({ cs: r.cs.subtract(cs), h: r.h })).filter((r) => !r.cs.isEmpty()));
   };
   /**
+   * The tallest of `heights` at which raised graphics on a face drop more than `limit` mm to the surface
+   * beside them (0 when none do): anything raised that tall, with lower ground just past its edge.
+   */
+  const tallStep = (faceId: string, heights: number[], limit: number) => {
+    const list = raisedOn.get(faceId) ?? [];
+    for (const h of [...new Set(heights)].sort((a, b) => b - a)) {
+      if (h <= limit + 1e-6) break;
+      const high = list.filter((r) => r.h >= h - 1e-6);
+      if (!high.length) continue;
+      const near = list.filter((r) => r.h >= h - limit - 1e-6);
+      // A thin band just outside the edges, minus what stands within `limit` of the top.
+      if (outlineOf(high).offset(0.05, 'Miter').subtract(outlineOf(near)).area() > 0.025) return h;
+    }
+    return 0;
+  };
+  /**
    * Each part as designed, with the raised graphics, cut-throughs and lithophanes so far but not the
    * pockets: an inlay's colour fills all the material its pocket takes out, so it paints over earlier marks.
    * Until a part has a pocket it is the part itself, mesh for mesh.
@@ -269,22 +285,26 @@ export function applyGraphics(
         const relief = lithophane(fitted);
         if (!relief) continue;
         const window = rectCS(g.frame.w, g.frame.h, g.frame.x, g.frame.y, g.frame.rotation).intersect(outline);
-        // The hole is a hair smaller than the relief, so the two overlap and always fuse into one part.
+        // Through the wall the hole is a hair smaller than the relief, so the two overlap and always fuse
+        // into one part; above the wall it takes the whole window, raised graphics and all.
         const holeWindow = window.offset(-0.02, 'Miter');
         if (window.area() < 0.05 || holeWindow.isEmpty()) {
           out.warnings.push({ scope: 'graphics', level: 'warn', text: `A lithophane on ${label} is outside the face.` });
           continue;
         }
-        const hole = placeOnFace(slab(holeWindow, -(face.thickness + OVERLAP), top), face);
+        const hole = placeSlabs(face, [
+          [holeWindow, -(face.thickness + OVERLAP), 0],
+          [window, -SEAM, top],
+        ]);
         const clipped = relief.intersect(slab(window, -(fitted.litho!.max + 2), 1));
         // Never outside the part (on a triangular box the relief would poke through the next side).
         const placed = placeOnFace(clipped, face).intersect(hullOf(face.partId)).asOriginal();
         out.colorIds.set(placed.originalID(), g.color);
         if (!commit(face.partId, base, unionAll([base.subtract(hole), placed]), hole.volume(), label)) continue;
         grow(face.partId, base, (m) => unionAll([m.subtract(hole), placed]));
-        // The relief replaces everything in its window, the hole and the wall it fuses with.
-        clearFills(face.partId, placeOnFace(slab(window, -(Math.max(face.thickness, fitted.litho!.max) + OVERLAP), top), face));
-        clearRaised(face.id, holeWindow);
+        clearFills(face.partId, hole);
+        clearFills(face.partId, placed);
+        clearRaised(face.id, window);
         const inward = fitted.litho!.max - face.thickness;
         if (inward > 2 + 1e-6 && sideways(face))
           out.warnings.push({
@@ -315,12 +335,14 @@ export function applyGraphics(
         raisedOn.set(face.id, [...(raisedOn.get(face.id) ?? []), ...regions.map((r) => ({ cs: r.cs, h: r.h + depth }))]);
         const proud = Math.max(...regions.map((r) => r.h)) + depth;
         if (face.onBed) out.warnings.push({ scope: 'graphics', level: 'warn', text: `Raised graphics on ${label} face the print bed. Use Deboss or Inlay there, or print with supports.` });
-        // On a face that prints sideways, a raised graphic's underside is a flat overhang as deep as it is tall.
-        if (sideways(face) && depth > 2 + 1e-6)
+        // On a face that prints sideways, a raised edge is a flat overhang as deep as the step down beside it:
+        // stacked graphics whose edges line up make one tall step.
+        const step = sideways(face) ? tallStep(face.id, regions.map((r) => r.h + depth), 2) : 0;
+        if (step)
           out.warnings.push({
             scope: 'graphics',
             level: 'warn',
-            text: `Raised graphics on ${label} stand ${mm(depth)} mm proud. Printed on its side, a raise over 2 mm leaves an overhang underneath that needs supports. Lower them to 2 mm or use Engraved.`,
+            text: `Raised graphics on ${label} stand ${mm(step)} mm proud at an edge. Printed on its side, an edge over 2 mm tall leaves an overhang underneath that needs supports. Lower them, keep the edges of stacked graphics apart, or use Engraved.`,
           });
         if (face.raiseLimit && proud > face.raiseLimit.max + 1e-6)
           out.warnings.push({
@@ -361,7 +383,15 @@ export function applyGraphics(
     }
   }
   for (const [partId, labels] of touched) tidyPart(out, partId, solids[partId], [...labels]);
-  for (const inl of Object.values(out.inlays)) inl.solid = dropSlivers(inl.solid);
+  for (const inl of Object.values(out.inlays)) {
+    const body = out.solids[inl.partId];
+    let fill = inl.solid;
+    // Where colour and body share faces a boolean can come out slightly wrong and leave colour inside the
+    // body. A union tells when there is real overlap; only then take the body out, since doing it every
+    // time can itself leave slivers outside the part.
+    if (fill.volume() + body.volume() - fill.add(body).volume() > 0.01) fill = fill.subtract(body);
+    inl.solid = dropSlivers(fill);
+  }
   if (orphans)
     out.warnings.push({
       scope: 'graphics',
@@ -373,13 +403,7 @@ export function applyGraphics(
 
 /** Remove boolean slivers from an inlay fill: tiny, or thinner on average than 0.1 mm. Real pieces stay. */
 function dropSlivers(m: Manifold): Manifold {
-  const pieces = m.decompose();
-  if (pieces.length === 0) return m;
-  const kept = pieces.filter((q) => {
-    const v = q.volume();
-    return v >= 0.02 && (2 * v) / Math.max(1e-9, q.surfaceArea()) >= 0.05;
-  });
-  return kept.length === pieces.length ? m : kept.length ? K().Manifold.compose(kept) : emptySolid();
+  return keepPieces(m, m.decompose(), (v, q) => (v < 0 ? v <= -0.02 : v >= 0.02 && (2 * v) / Math.max(1e-9, q.surfaceArea()) >= 0.05));
 }
 
 const mm = (v: number) => (Math.round(v * 100) / 100).toString();
@@ -396,16 +420,15 @@ function tidyPart(out: GraphicsOutcome, partId: string, before: Manifold, labels
   if (!after || after === before) return;
   const pieces = after.decompose();
   if (pieces.length <= 1) return;
-  // Keep real pieces and sealed voids (inward-facing shells with negative volume); drop only specks.
-  const kept = pieces.filter((m) => Math.abs(m.volume()) >= MIN_PIECE);
-  const solidCount = kept.filter((m) => m.volume() > 0).length;
+  const solidCount = pieces.filter((m) => m.volume() >= MIN_PIECE).length;
   if (solidCount === 0) {
     out.solids[partId] = before;
     for (const [key, inl] of Object.entries(out.inlays)) if (inl.partId === partId) delete out.inlays[key];
     out.warnings.push({ scope: 'graphics', level: 'warn', text: `Graphics on ${labels.join(', ')} could not be applied with these settings, so they were left out.` });
     return;
   }
-  if (kept.length < pieces.length) out.solids[partId] = K().Manifold.compose(kept);
+  // Drop specks; real pieces and sealed voids (inward-facing shells with negative volume) stay.
+  out.solids[partId] = keepPieces(after, pieces, (v) => Math.abs(v) >= MIN_PIECE);
   if (solidCount > before.decompose().filter((m) => m.volume() > 0).length) {
     const where = labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
     out.warnings.push({

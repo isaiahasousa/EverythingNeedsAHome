@@ -370,6 +370,95 @@ try {
     await step(2, again);
     await again.waitForFunction(() => document.querySelector('#param-width')?.value === '166', null, { timeout: 5000 }).catch(() => {});
     check((await again.inputValue('#param-width')) === '166', 'and one made right before the tab is closed');
+    // An undo saves at once, without the usual pause: closing straight after it keeps it too.
+    await again.fill('#param-width', '177');
+    await again.press('#param-width', 'Enter');
+    const t1 = await again.evaluate(() => Date.now());
+    await savedToIndexedDb(again, t1);
+    await again.click('.step-title');
+    await again.keyboard.press('Control+z');
+    await again.close();
+    const third = await ctx.newPage();
+    third.on('pageerror', (e) => consoleErrors.push(e.message));
+    await third.goto(url, { waitUntil: 'networkidle' });
+    await settleOn(third);
+    await step(2, third);
+    await third.waitForFunction(() => document.querySelector('#param-width')?.value === '166', null, { timeout: 5000 }).catch(() => {});
+    check((await third.inputValue('#param-width')) === '166', 'an undo right before the tab is closed is kept');
+    await ctx.close();
+  }
+
+  console.log('Autosave of a genuinely large project');
+  {
+    // Photos big enough that each save takes a noticeable time, so a reload can land while one is under way.
+    const first = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const maker = await first.newPage();
+    await maker.goto(url, { waitUntil: 'networkidle' });
+    await settleOn(maker);
+    await step(2, maker);
+    await maker.fill('#param-width', '120');
+    await maker.press('#param-width', 'Enter');
+    await maker.waitForTimeout(800);
+    const project = await maker.evaluate(() => JSON.parse(localStorage.getItem('everythingneedsahome.project.v1')));
+    await first.close();
+    const noise = `data:image/png;base64,${png(1100, 1100, () => [Math.random() * 256, Math.random() * 256, Math.random() * 256, 255]).toString('base64')}`;
+    // A fresh page, left untouched while the project is saved behind it (as another tab would).
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const pg = await ctx.newPage();
+    pg.on('pageerror', (e) => consoleErrors.push(e.message));
+    pg.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
+    await pg.goto(url, { waitUntil: 'networkidle' });
+    await settleOn(pg);
+    project.graphics.push(
+      ...[0, 1].map((i) => ({
+        ...project.graphics[0],
+        id: `photo${i}`,
+        source: { kind: 'image', name: `photo${i}`, dataUrl: noise, threshold: 128, invert: false, detail: 3 },
+        mode: 'lithophane',
+        hidden: true,
+      })),
+    );
+    // Seed it the way an earlier visit would have left it: the project in IndexedDB, a pointer in localStorage.
+    await pg.evaluate(async (json) => {
+      await new Promise((resolve, reject) => {
+        const req = indexedDB.open('everythingneedsahome', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('autosave');
+        req.onsuccess = () => {
+          const tx = req.result.transaction('autosave', 'readwrite');
+          tx.objectStore('autosave').put(json, 'everythingneedsahome.project.v1');
+          tx.oncomplete = () => {
+            req.result.close();
+            resolve();
+          };
+          tx.onerror = () => reject(tx.error);
+        };
+        req.onerror = () => reject(req.error);
+      });
+      localStorage.setItem('everythingneedsahome.project.v1', JSON.stringify({ storedIn: 'indexeddb', savedAt: 1 }));
+    }, JSON.stringify(project));
+    const reopen = async (how, p) => {
+      if (how === 'reload') await p.reload({ waitUntil: 'networkidle' });
+      else {
+        await p.close();
+        p = await ctx.newPage();
+        p.on('pageerror', (e) => consoleErrors.push(e.message));
+        await p.goto(url, { waitUntil: 'networkidle' });
+      }
+      await settleOn(p);
+      await step(2, p);
+      return p;
+    };
+    let big = await reopen('reload', pg);
+    check((await big.inputValue('#param-width')) === '120', 'a large project opens from IndexedDB, and a page left untouched never writes over it');
+    // The usual autosave starts 400 ms after an edit; 450 ms later it is still writing this project.
+    for (const [how, width] of [['reload', '131'], ['close', '132']]) {
+      await big.fill('#param-width', width);
+      await big.press('#param-width', 'Enter');
+      await big.waitForTimeout(450);
+      big = await reopen(how, big);
+      await big.waitForFunction((w) => document.querySelector('#param-width')?.value === w, width, { timeout: 5000 }).catch(() => {});
+      check((await big.inputValue('#param-width')) === width, `an edit is kept when a ${how} lands while a large save is under way`);
+    }
     await ctx.close();
   }
 

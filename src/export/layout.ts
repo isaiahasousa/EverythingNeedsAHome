@@ -67,20 +67,23 @@ function pack(items: Item[], bed: Printer) {
 
 /**
  * Lay the bodies out on the bed in print orientation, centred. Each part is turned 90° only when that is
- * the one way it fits; when the parts then do not fit together, every part turned, or all with their long
- * sides the same way, often does.
+ * the one way it fits; when the parts then do not fit together, the other ways of turning them are tried,
+ * fewest turns first.
  */
 export function layoutParts(parts: PartMesh[], bed: Printer): Layout {
   const bodies = parts.filter((p) => p.role === 'body');
-  const canTurn = (p: PartMesh) => fitsBed(footprint(p).d, footprint(p).w, bed);
-  const mustTurn = (p: PartMesh) => !fitsBed(footprint(p).w, footprint(p).d, bed) && canTurn(p);
-  const long = (p: PartMesh, alongX: boolean) => ((footprint(p).d > footprint(p).w) === alongX ? canTurn(p) : mustTurn(p));
-  const arrangements = [bodies.map(mustTurn), bodies.map(canTurn), bodies.map((p) => long(p, true)), bodies.map((p) => long(p, false))];
-  let packed = pack(bodies.map((p, i) => orient(p, arrangements[0][i])), bed);
-  for (const turns of arrangements.slice(1)) {
-    if (packed.fits) break;
-    const tried = pack(bodies.map((p, i) => orient(p, turns[i])), bed);
-    if (tried.fits) packed = tried;
+  const mustTurn = (p: PartMesh) => !fitsBed(footprint(p).w, footprint(p).d, bed) && fitsBed(footprint(p).d, footprint(p).w, bed);
+  let packed = pack(bodies.map((p) => orient(p, mustTurn(p))), bed);
+  if (!packed.fits && bodies.length <= 10) {
+    const turnCount = (mask: number) => bodies.reduce((n, _, i) => n + ((mask >> i) & 1), 0);
+    const masks = [...Array(1 << bodies.length).keys()].sort((a, b) => turnCount(a) - turnCount(b));
+    for (const mask of masks) {
+      const tried = pack(bodies.map((p, i) => orient(p, ((mask >> i) & 1) === 1)), bed);
+      if (tried.fits) {
+        packed = tried;
+        break;
+      }
+    }
   }
   const { rows, totalD } = packed;
   const matrices = new Map<string, Mat4>();

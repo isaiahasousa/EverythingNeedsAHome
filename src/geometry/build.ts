@@ -3,7 +3,7 @@ import type { Manifold } from 'manifold-3d';
 import { BOX_TYPES } from '../boxes';
 import type { BuildRequest, BuildResult, Mat4, MeshGroup, PartInfo, PartMesh, Vec3, Warning } from '../core/types';
 import { applyGraphics, MIN_PIECE } from './graphics3d';
-import { K, releaseAll, setQuality, transformed } from './kernel';
+import { keepPieces, releaseAll, setQuality, transformed } from './kernel';
 
 const CREASE = Math.cos((32 * Math.PI) / 180);
 const EDGE = Math.cos((38 * Math.PI) / 180);
@@ -169,9 +169,8 @@ export function runBuild(req: BuildRequest): BuildResult {
       // Specks left by the booleans are not printable; drop them (keeping any sealed voids) before counting pieces.
       const pieces = solid.decompose();
       if (pieces.length < 2) continue;
-      const kept = pieces.filter((m) => Math.abs(m.volume()) >= MIN_PIECE);
-      const real = kept.filter((m) => m.volume() > 0).length;
-      if (kept.length < pieces.length && real) solids[info.id] = K().Manifold.compose(kept);
+      const real = pieces.filter((m) => m.volume() >= MIN_PIECE).length;
+      if (real) solids[info.id] = keepPieces(solid, pieces, (v) => Math.abs(v) >= MIN_PIECE);
       if (real > 1)
         warnings.push({ level: 'warn', text: `The ${info.name.toLowerCase()} comes out in ${real} separate pieces with these settings. Try thicker walls or a larger box.` });
     }

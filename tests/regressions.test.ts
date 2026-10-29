@@ -1017,3 +1017,108 @@ describe('review round 8', () => {
     expect(a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0).toBe(true);
   });
 });
+
+describe('review round 9', () => {
+  const gfx = (over: Partial<Graphic>): Graphic => ({
+    id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'rect', sides: 5, ratio: 0.5, corner: 0 }, x: 0, y: 0, w: 30, h: 20,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'inlay', depth: 0.6, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+  });
+  type Shape = 'rect' | 'circle' | 'star' | 'ring' | 'moon';
+  const shape = (s: Shape, over: Partial<Graphic>, corner = 0) =>
+    placeGraphic(gfx({ source: { kind: 'shape', shape: s, sides: 5, ratio: 0.5, corner }, ...over }), builtinShape(s, 5, 0.5, corner));
+  const photo = (over: Partial<Graphic>) => {
+    const pg = placeGraphic(gfx({ mode: 'lithophane', ...over }), builtinShape('rect', 4, 0.5, 0));
+    const pw = 24, ph = 16;
+    pg.litho = { pixels: Uint8Array.from({ length: pw * ph }, (_, k) => ((k % pw) * 255) / (pw - 1)), pw, ph, min: 0.8, max: 2.5 };
+    return pg;
+  };
+  /** Overlap measured with a union, which a boolean misjudging shared faces leaves alone. */
+  const realOverlap = (a: Manifold, b: Manifold) => a.volume() + b.volume() - a.add(b).volume();
+
+  it('dropping a speck keeps sealed voids, so colour buried under a raised plate never overlaps the body', () => {
+    const s = setup('tray');
+    const inlay = shape('rect', { w: 20, h: 10 });
+    const plate = shape('rect', { id: 'p', mode: 'emboss', depth: 2, w: 30, h: 20 });
+    // The middle of a 1 mm ring cut through a wall falls out as a speck.
+    const tiny = shape('ring', { id: 't', faceId: 'left', mode: 'cut', w: 1, h: 1 });
+    const out = applyGraphics(s.build(), s.faces(), [inlay, plate, tiny]);
+    const fill = out.inlays['base::#ff0000'].solid;
+    expect(out.solids.base.decompose().some((m) => m.volume() < -1)).toBe(true);
+    expect(realOverlap(fill, out.solids.base)).toBeLessThan(0.01);
+    expect(overlap(fill, out.solids.base)).toBeLessThan(0.01);
+  });
+
+  it('colour stays out of the body where pockets of one colour nearly meet on a raised ring', () => {
+    const s = setup('drawers');
+    const marks: [Graphic['mode'], Shape, number, number, number, number, number, number, string][] = [
+      ['deboss', 'rect', 25.02, 19.51, 9.16, -4.07, 0, 1.22, '#0000ff'],
+      ['deboss', 'star', 38.68, 15.91, 17.29, 9.61, -38, 0.22, '#ff0000'],
+      ['emboss', 'ring', 36.2, 8.89, 15.79, -4.66, 0, 2.11, '#0000ff'],
+      ['inlay', 'rect', 29.8, 18.56, 12.43, -8.86, 0, 1.75, '#00ff00'],
+      ['inlay', 'moon', 34.99, 18.38, 20.54, 5.56, 0, 1.73, '#00ff00'],
+    ];
+    for (const corner of [0, 0.15]) {
+      const gs = marks.map(([mode, shp, w, h, x, y, rotation, depth, color], i) => shape(shp, { id: `g${i}`, faceId: 'left', mode, w, h, x, y, rotation, depth, color }, corner));
+      const out = applyGraphics(s.build(), s.faces(), gs);
+      const fill = out.inlays['sleeve::#00ff00'].solid;
+      expect(overlap(fill, out.solids.sleeve), `corner ${corner}`).toBeLessThan(0.01);
+      expect(realOverlap(fill, out.solids.sleeve), `corner ${corner}`).toBeLessThan(0.01);
+    }
+  });
+
+  it('stacked raised graphics on a side wall warn when their edges line up into a step over 2 mm', () => {
+    const s = setup('tray');
+    const solids = s.build();
+    const prints = { base: BOX_TYPES.tray.parts(s.p, s.R)[0].print };
+    const warns = (gs: ReturnType<typeof shape>[]) => applyGraphics(solids, s.faces(), gs, prints).warnings.some((w) => /needs supports/.test(w.text));
+    const raised = (id: string, depth: number, over: Partial<Graphic> = {}) => shape('rect', { id, mode: 'emboss', depth, w: 30, h: 10, ...over });
+    expect(warns([raised('a', 2.5)])).toBe(true);
+    expect(warns([raised('a', 1), raised('b', 1), raised('c', 1)])).toBe(true);
+    // A bar flush with the bottom edge of a plate.
+    expect(warns([raised('a', 2, { h: 20 }), raised('b', 1.5, { h: 4, y: -8 })])).toBe(true);
+    // A name well inside a plate: steps of 1.5 and 1 mm.
+    expect(warns([raised('a', 1.5, { w: 50, h: 24 }), raised('b', 1, { w: 20, h: 8 })])).toBe(false);
+  });
+
+  it('a lithophane replaces exactly the colour under it, and takes a raised plate away across its whole window', () => {
+    const s = setup('tray');
+    const faces = s.faces();
+    const front = faces.find((f) => f.id === 'front')!;
+    const solids = s.build();
+    // A deep inlay near the floor, then a photo over it: no empty pocket is left behind the photo.
+    const low = -front.height / 2 + 3;
+    const pic = photo({ id: 'l', w: 40, h: 10, y: low });
+    const out = applyGraphics(solids, faces, [shape('rect', { depth: 3.5, w: 30, h: 4, y: low }), pic]);
+    const ideal = applyGraphics(solids, faces, [pic]).solids.base;
+    const fill = out.inlays['base::#ff0000']?.solid;
+    const gap = ideal.subtract(out.solids.base);
+    expect((fill ? gap.subtract(fill) : gap).volume()).toBeLessThan(0.05);
+    // No fin of the plate stands just inside the window's edge.
+    const onPlate = applyGraphics(solids, faces, [shape('rect', { id: 'p', mode: 'emboss', depth: 2, w: 50, h: 24 }), photo({ id: 'l2', w: 20, h: 14 })]).solids.base;
+    const band = transformed(box(9.95, 9.999, -5, 5, 0.2, 1.9), frameMatrix(front.u, front.v, front.n, front.origin));
+    expect(overlap(onPlate, band)).toBeLessThan(0.01);
+  });
+
+  it('parts that fit the bed only with some turned and others not are laid out that way', () => {
+    const bed = PRINTERS.find((b) => b.id === 'bed300')!;
+    const part = (id: string, w: number, d: number) =>
+      ({ id, name: id, role: 'body', print: IDENTITY, printMin: [-w / 2, -d / 2, 0], printMax: [w / 2, d / 2, 30] }) as unknown as PartMesh;
+    const parts = [part('A', 205, 104), part('B', 206, 124), part('C', 183, 76)];
+    const L = layoutParts(parts, bed);
+    expect(L.overflow).toEqual([]);
+    const spans = parts.map((p) => {
+      const m = L.matrices.get(p.id)!;
+      const pts = [0, 1, 2, 3].map((k) => applyMat(m, [k & 1 ? p.printMax[0] : p.printMin[0], k & 2 ? p.printMax[1] : p.printMin[1], 0]));
+      for (const [x, y] of pts) {
+        expect(Math.abs(x)).toBeLessThanOrEqual(bed.w / 2 + 0.01);
+        expect(Math.abs(y)).toBeLessThanOrEqual(bed.d / 2 + 0.01);
+      }
+      return { x0: Math.min(...pts.map((q) => q[0])), x1: Math.max(...pts.map((q) => q[0])), y0: Math.min(...pts.map((q) => q[1])), y1: Math.max(...pts.map((q) => q[1])) };
+    });
+    for (let i = 0; i < spans.length; i++)
+      for (let j = i + 1; j < spans.length; j++) {
+        const [a, b] = [spans[i], spans[j]];
+        expect(a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0, `${i} ${j}`).toBe(true);
+      }
+  });
+});
