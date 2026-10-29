@@ -272,6 +272,13 @@ try {
   check((await page.inputValue('#param-width')) === '90', 'undo');
   await page.keyboard.press('Control+Shift+z');
   check((await page.inputValue('#param-width')) === '120', 'redo');
+  // Arrow keys step from what was just typed.
+  await page.fill('#param-depth', '70');
+  await page.keyboard.press('ArrowUp');
+  check((await page.inputValue('#param-depth')) === '71', 'arrow keys step from the typed value');
+  await page.click('.step-title');
+  await page.keyboard.press('Control+z');
+  check((await page.inputValue('#param-depth')) === '64', 'and one undo takes the nudge back');
   await page.click('.segmented button:has-text("Inches")');
   check((await page.inputValue('#param-width')) === '4.724', 'inch display');
   // Tabbing through fields without typing must not store the rounded inch values.
@@ -290,6 +297,16 @@ try {
   await settle();
   await step(2);
   check((await page.inputValue('#param-width')) === '120', 'autosave survives a reload');
+  // An edit made just before closing or reloading is saved too.
+  await page.fill('#param-width', '125');
+  await page.press('#param-width', 'Enter');
+  await page.waitForTimeout(80);
+  await page.reload({ waitUntil: 'networkidle' });
+  await settle();
+  await step(2);
+  check((await page.inputValue('#param-width')) === '125', 'an edit made right before a reload is kept');
+  await page.fill('#param-width', '120');
+  await page.press('#param-width', 'Enter');
 
   console.log('Autosave beyond the localStorage quota');
   {

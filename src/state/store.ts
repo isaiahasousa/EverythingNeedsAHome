@@ -115,7 +115,25 @@ export function update(fn: (p: Project) => Project, key = '') {
   projectStore.set(next);
   syncHistory();
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => autosave(projectStore.get()), 400);
+  saveTimer = setTimeout(() => {
+    saveTimer = undefined;
+    autosave(projectStore.get());
+  }, 400);
+}
+
+/** Save at once if an autosave is still waiting (the page is being hidden, reloaded or closed). */
+export function flushAutosave() {
+  if (saveTimer === undefined) return;
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  autosave(projectStore.get());
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flushAutosave);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushAutosave();
+  });
 }
 
 let autosaveNoticeShown = false;

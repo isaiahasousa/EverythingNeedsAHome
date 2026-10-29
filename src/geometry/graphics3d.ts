@@ -120,8 +120,24 @@ export function applyGraphics(
   const touched = new Map<string, Set<string>>();
   /** Cut-through cutters per part: inlay fills never plug them. */
   const cuts = new Map<string, Manifold[]>();
-  /** Height of the tallest raised graphic so far on each face: later cutters must clear it. */
-  const raisedOn = new Map<string, number>();
+  /** Raised graphics so far on each face (outline and height): later marks go through and sit on them. */
+  const raisedOn = new Map<string, { cs: CrossSection; h: number }[]>();
+  /**
+   * A mark's solid measured from the surface under it, the wall or a raised graphic: depth `d` below that
+   * surface, up to `upTo(surface height)`.
+   */
+  const marked = (faceId: string, cs: CrossSection, d: number, upTo: (h: number) => number) => {
+    let rest = cs;
+    const pieces: Manifold[] = [];
+    for (const r of [...(raisedOn.get(faceId) ?? [])].sort((a, b) => b.h - a.h)) {
+      const on = rest.intersect(r.cs);
+      if (on.isEmpty()) continue;
+      pieces.push(slab(on, r.h - d, upTo(r.h)));
+      rest = rest.subtract(r.cs);
+    }
+    pieces.push(slab(rest, -d, upTo(0)));
+    return unionAll(pieces);
+  };
   /** Each part's convex hull: lithophanes never reach outside the part. */
   const hulls = new Map<string, Manifold>();
   const hullOf = (partId: string) => {
@@ -161,7 +177,7 @@ export function applyGraphics(
     if (!touched.has(face.partId)) touched.set(face.partId, new Set());
     touched.get(face.partId)!.add(label);
     // Cutters start above any raised graphic already on this face, so they go through it.
-    const top = OVERLAP + (raisedOn.get(face.id) ?? 0);
+    const top = OVERLAP + Math.max(0, ...(raisedOn.get(face.id) ?? []).map((r) => r.h));
     try {
       if (face.solid && (g.mode === 'cut' || g.mode === 'lithophane')) {
         out.warnings.push({ scope: 'graphics', level: 'warn', text: `${label} is solid underneath, so a graphic there cannot cut through or be a lithophane. Engrave it instead.` });
@@ -227,7 +243,7 @@ export function applyGraphics(
         const solid = placeOnFace(slab(cs, -OVERLAP, depth), face).asOriginal();
         out.colorIds.set(solid.originalID(), g.color);
         if (!commit(face.partId, base, base.add(solid), 0, label)) continue;
-        raisedOn.set(face.id, Math.max(raisedOn.get(face.id) ?? 0, depth));
+        raisedOn.set(face.id, [...(raisedOn.get(face.id) ?? []), { cs, h: depth }]);
         if (face.onBed) out.warnings.push({ scope: 'graphics', level: 'warn', text: `Raised graphics on ${label} face the print bed. Use Deboss or Inlay there, or print with supports.` });
         // On a face that prints sideways, a raised graphic's underside is a flat overhang as deep as it is tall.
         if (sideways(face) && depth > 2 + 1e-6)
@@ -244,7 +260,8 @@ export function applyGraphics(
           });
       } else if (g.mode === 'deboss' || g.mode === 'inlay') {
         const d = depth;
-        const cutter = placeOnFace(slab(cs, -d, top), face).asOriginal();
+        // Depth counts from the surface under the mark, so a mark on a raised plaque sits in the plaque.
+        const cutter = placeOnFace(marked(face.id, cs, d, () => top), face).asOriginal();
         out.colorIds.set(cutter.originalID(), g.color);
         if (!commit(face.partId, base, base.subtract(cutter), cutter.volume(), label)) continue;
         if (depth >= face.thickness)
@@ -257,7 +274,8 @@ export function applyGraphics(
         clearFills(face.partId, cutter);
         if (g.mode === 'inlay') {
           const key = `${face.partId}::${g.color.toLowerCase()}`;
-          const fill = placeOnFace(slab(cs, -d, 0), face);
+          // The colour fills the pocket up to the surface it was cut from, and only where there was material.
+          const fill = placeOnFace(marked(face.id, cs, d, (h) => h), face).intersect(base);
           const prev = out.inlays[key];
           out.inlays[key] = { partId: face.partId, color: g.color, solid: prev ? prev.solid.add(fill) : fill };
         }
@@ -275,8 +293,9 @@ export function applyGraphics(
   for (const [partId, labels] of touched) tidyPart(out, partId, solids[partId], [...labels]);
   // Inlay fills only fill what is left of their pockets: never a through-cut, never the body.
   for (const inl of Object.values(out.inlays)) {
-    // Only what the pocket took out of the part: an inlay deeper than the wall stops flush inside.
-    let fill = inl.solid.intersect(solids[inl.partId]).subtract(out.solids[inl.partId]);
+    // Each fill was clipped to the part when its pocket was cut (so an inlay deeper than the wall stops
+    // flush inside); now take out whatever later graphics put back or cut through.
+    let fill = inl.solid.subtract(out.solids[inl.partId]);
     const through = cuts.get(inl.partId);
     if (through?.length) fill = fill.subtract(unionAll(through));
     inl.solid = dropSlivers(fill);

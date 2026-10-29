@@ -100,7 +100,7 @@ export function NumberField({ label, value, onChange, min = -Infinity, max = Inf
     const next = clampV(v * scale);
     if (Math.abs(next - value) > 1e-9) onChange(next);
   };
-  const nudge = (dir: number, mult = 1) => onChange(clampV(+(value + dir * step * scale * mult).toFixed(6)));
+  const nudge = (dir: number, mult = 1, from = value) => onChange(clampV(+(from + dir * step * scale * mult).toFixed(6)));
 
   // Drag the label sideways to scrub the value.
   const scrub = useRef<{ x: number; v: number } | null>(null);
@@ -150,8 +150,10 @@ export function NumberField({ label, value, onChange, min = -Infinity, max = Inf
               (e.target as HTMLInputElement).blur();
             } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
               e.preventDefault();
+              // Step from what was typed, not from the value before typing.
+              const typed = draft !== null && draft.trim() !== shown ? evalExpr(draft) : null;
               setDraft(null);
-              nudge(e.key === 'ArrowUp' ? 1 : -1, e.shiftKey ? 10 : e.altKey ? 0.1 : 1);
+              nudge(e.key === 'ArrowUp' ? 1 : -1, e.shiftKey ? 10 : e.altKey ? 0.1 : 1, typed === null ? value : clampV(typed * scale));
             }
           }}
         />

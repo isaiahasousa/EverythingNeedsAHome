@@ -1,4 +1,4 @@
-import { mulMat, translation } from '../core/math';
+import { mulMat, rotZ, translation } from '../core/math';
 import type { Mat4, PartMesh } from '../core/types';
 
 export interface Printer {
@@ -31,12 +31,21 @@ export interface Layout {
 
 const GAP = 8;
 
+/** A body in print orientation, turned 90° about Z when only that way fits the bed. */
+function placeItem(p: PartMesh, bed: Printer) {
+  const w = p.printMax[0] - p.printMin[0], d = p.printMax[1] - p.printMin[1], h = p.printMax[2] - p.printMin[2];
+  const fits = (a: number, b: number) => a <= bed.w + 0.01 && b <= bed.d + 0.01;
+  if (!fits(w, d) && fits(d, w)) {
+    // Turning by +90° maps (x, y) to (-y, x).
+    return { p, w: d, d: w, h, minX: -p.printMax[1], minY: p.printMin[0], minZ: p.printMin[2], base: mulMat(rotZ(90), p.print) };
+  }
+  return { p, w, d, h, minX: p.printMin[0], minY: p.printMin[1], minZ: p.printMin[2], base: p.print };
+}
+
 /** Shelf-pack the bodies on the bed in print orientation, centred, front row first. */
 export function layoutParts(parts: PartMesh[], bed: Printer): Layout {
   const bodies = parts.filter((p) => p.role === 'body');
-  const items = bodies
-    .map((p) => ({ p, w: p.printMax[0] - p.printMin[0], d: p.printMax[1] - p.printMin[1], h: p.printMax[2] - p.printMin[2] }))
-    .sort((a, b) => b.d - a.d || b.w - a.w);
+  const items = bodies.map((p) => placeItem(p, bed)).sort((a, b) => b.d - a.d || b.w - a.w);
   const rows: { items: typeof items; w: number; d: number }[] = [];
   for (const it of items) {
     const row = rows.find((r) => r.w + GAP + it.w <= bed.w);
@@ -54,8 +63,8 @@ export function layoutParts(parts: PartMesh[], bed: Printer): Layout {
   for (const row of rows) {
     let x = -row.w / 2;
     for (const it of row.items) {
-      const t = translation(x - it.p.printMin[0], y + (row.d - it.d) / 2 - it.p.printMin[1], -it.p.printMin[2]);
-      matrices.set(it.p.id, mulMat(t, it.p.print));
+      const t = translation(x - it.minX, y + (row.d - it.d) / 2 - it.minY, -it.minZ);
+      matrices.set(it.p.id, mulMat(t, it.base));
       if (it.w > bed.w + 0.01 || it.d > bed.d + 0.01) overflow.push(it.p.name);
       if (it.h > bed.h + 0.01) tooTall.push(it.p.name);
       x += it.w + GAP;

@@ -4,7 +4,8 @@ import type { Manifold } from 'manifold-3d';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { BOX_ORDER, BOX_TYPES, DEFAULT_PARAMS, normalizeParams } from '../src/boxes';
 import { lengthProps } from '../src/ui/ParamField';
-import { frameMatrix, pointInPolygon, signedArea } from '../src/core/math';
+import { applyMat, frameMatrix, IDENTITY, pointInPolygon, signedArea } from '../src/core/math';
+import { layoutParts, PRINTERS } from '../src/export/layout';
 import { runBuild } from '../src/geometry/build';
 import { normalizeProject } from '../src/state/project';
 import { applyGraphics } from '../src/geometry/graphics3d';
@@ -14,7 +15,7 @@ import { builtinShape, patternShape } from '../src/graphics/shapes';
 import { customFontName, loadFont, registerCustomFont, registerSavedFonts } from '../src/graphics/text';
 import { sourceKey } from '../src/graphics/resolve';
 import { evalExpr } from '../src/ui/controls';
-import type { BoxParams, FaceDef, Graphic, Vec2 } from '../src/core/types';
+import type { BoxParams, FaceDef, Graphic, PartMesh, Vec2 } from '../src/core/types';
 import { loadKernel } from './setup-kernel';
 
 beforeAll(loadKernel);
@@ -774,10 +775,14 @@ describe('review round 6', () => {
     const plaque = placeGraphic(gfx({ mode: 'emboss', depth: 1, w: 50, h: 20 }), rect());
     const dot = (mode: Graphic['mode']) => placeGraphic(gfx({ mode, depth: 0.6, w: 10, h: 10, source: { kind: 'shape', shape: 'circle', sides: 4, ratio: 0.5, corner: 0 } }), builtinShape('circle'));
     const alone = applyGraphics(solids, faces, [plaque]).solids.base.volume();
+    // Depth counts from the plaque's surface: a 0.6 mm engraving takes 0.6 mm out of the plaque.
     const engraved = applyGraphics(solids, faces, [plaque, dot('deboss')]);
-    expect(alone - engraved.solids.base.volume()).toBeGreaterThan(Math.PI * 25 * 1.5);
+    expect(alone - engraved.solids.base.volume()).toBeCloseTo(Math.PI * 25 * 0.6, 0);
+    // The inlay colour fills that pocket right up to the plaque's surface.
     const inlaid = applyGraphics(solids, faces, [plaque, dot('inlay')]);
-    expect(Object.values(inlaid.inlays)[0].solid.volume()).toBeGreaterThan(Math.PI * 25 * 0.5);
+    const fill = Object.values(inlaid.inlays)[0].solid;
+    expect(fill.volume()).toBeCloseTo(Math.PI * 25 * 0.6, 0);
+    expect(fill.boundingBox().min[1]).toBeCloseTo(-s.R.outer[1] / 2 - 1, 3);
     const cut = applyGraphics(solids, faces, [plaque, dot('cut')]);
     const D = s.R.outer[1];
     expect(cut.solids.base.intersect(box(-1, 1, -D / 2 - 2, -D / 2 + 2, s.R.outer[2] / 2 - 1, s.R.outer[2] / 2 + 1)).volume()).toBeLessThan(0.01);
@@ -826,5 +831,27 @@ describe('review round 6', () => {
     expect(lengthProps('in', 0.05).step).toBeCloseTo(0.002, 6);
     expect(lengthProps('in', 0.1).step).toBeCloseTo(0.004, 6);
     expect(lengthProps('in', 1).step).toBe(0.05);
+  });
+});
+
+describe('review round 7', () => {
+  it('a part that only fits the bed turned 90 degrees is turned, not called too big', () => {
+    const bed = PRINTERS.find((b) => b.id === 'bed250')!;
+    const part = (id: string, w: number, d: number, h = 30) =>
+      ({ id, name: id, role: 'body', print: IDENTITY, printMin: [-w / 2, -d / 2, 0], printMax: [w / 2, d / 2, h] }) as unknown as PartMesh;
+    for (const parts of [[part('Tray', 150, 230)], [part('Box', 120, 225), part('Lid', 120, 225, 12)], [part('Wide', 230, 150)]]) {
+      const L = layoutParts(parts, bed);
+      expect(L.overflow, parts.map((p) => p.name).join()).toEqual(parts.length > 1 ? ['the parts together'] : []);
+      for (const p of parts) {
+        const m = L.matrices.get(p.id)!;
+        const corners = [0, 1, 2, 3].map((k) => applyMat(m, [k & 1 ? p.printMax[0] : p.printMin[0], k & 2 ? p.printMax[1] : p.printMin[1], 0]));
+        for (const [x, y] of corners) {
+          expect(Math.abs(x), `${p.name} x`).toBeLessThanOrEqual(bed.w / 2 + 0.01);
+          if (parts.length === 1) expect(Math.abs(y), `${p.name} y`).toBeLessThanOrEqual(bed.d / 2 + 0.01);
+        }
+      }
+    }
+    // A part too big either way is still reported.
+    expect(layoutParts([part('Huge', 260, 260)], bed).overflow).toEqual(['Huge']);
   });
 });
