@@ -7,12 +7,12 @@ import { lengthProps } from '../src/ui/ParamField';
 import { applyMat, frameMatrix, IDENTITY, pointInPolygon, signedArea } from '../src/core/math';
 import { strFromU8, unzipSync } from 'fflate';
 import { layoutParts, layoutPlates, PLATE_GAP, PRINTERS } from '../src/export/layout';
-import { to3MF } from '../src/export/meshio';
+import { stlFileNames, to3MF } from '../src/export/meshio';
 import { runBuild } from '../src/geometry/build';
-import { normalizeProject } from '../src/state/project';
+import { blankProject, normalizeProject } from '../src/state/project';
 import { applyGraphics } from '../src/geometry/graphics3d';
 import { box, prism, releaseAll, rrect, transformed } from '../src/geometry/kernel';
-import { placeGraphic } from '../src/graphics/shape2d';
+import { graphicLabel, placeGraphic } from '../src/graphics/shape2d';
 import { builtinShape, patternShape } from '../src/graphics/shapes';
 import { customFontName, loadFont, registerCustomFont, registerSavedFonts } from '../src/graphics/text';
 import { sourceKey } from '../src/graphics/resolve';
@@ -1241,12 +1241,12 @@ describe('owner requests: AMS colours and plates', () => {
     );
     const res = runBuild({ id: 1, type: 'lidded', params: p, graphics: [disc], quality: 'draft' });
     const items = res.parts.map((x) => ({ part: x, matrix: x.print, slot: x.role === 'inlay' ? x.slot! : x.id === 'lid' ? 1 : 0 }));
-    // Slot 4 holds the same colour as slot 1.
+    // Slot 4 holds the same colour as slot 1: each slot is listed as it is, since Bambu Studio goes by the
+    // filament numbers in model_settings.config, not by colour.
     const zip = unzipSync(to3MF(items, ['#2f8a87', '#ece6d6', '#f0bf2c', '#2f8a87'], 'Test'));
     const model = strFromU8(zip['3D/3dmodel.model']);
     const colours = [...model.matchAll(/displaycolor="(#[0-9A-F]{6})FF"/g)].map((m) => m[1]);
-    expect(colours.slice(0, 3)).toEqual(['#2F8A87', '#ECE6D6', '#F0BF2C']);
-    expect(new Set(colours).size).toBe(4);
+    expect(colours).toEqual(['#2F8A87', '#ECE6D6', '#F0BF2C', '#2F8A87']);
     const config = strFromU8(zip['Metadata/model_settings.config']);
     const objects = [...config.matchAll(/<object id="(\d+)">(.*?)<\/object>/gs)].map(([, , body]) => body);
     const extruders = (body: string) => [...body.matchAll(/key="extruder" value="(\d+)"/g)].map((m) => +m[1]);
@@ -1268,6 +1268,118 @@ describe('owner requests: AMS colours and plates', () => {
     expect(p.filaments.slice(0, 2)).toEqual(['#b3263a', '#ece6d6']);
     expect(p.filaments.length).toBe(4);
     expect(p.graphics.map((g) => g.slot)).toEqual([1, 0, 1]);
+    expect(p.graphics.some((g) => 'color' in g)).toBe(false);
     expect(p.partSlots).toEqual({});
+  });
+});
+
+describe('review round 10', () => {
+  const gfx = (over: Partial<Graphic>): Graphic => ({
+    id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'circle', sides: 5, ratio: 0.5, corner: 0 }, x: 0, y: 0, w: 20, h: 20,
+    lockAspect: true, rotation: 0, mirror: false, mode: 'inlay', depth: 0.6, slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+  });
+
+  it('every part and colour inlay gets an STL file name of its own', () => {
+    const mk = (id: string, name: string, role: 'body' | 'inlay' = 'body', parentId?: string) => ({ id, name, role, parentId }) as unknown as PartMesh;
+    const parts = [
+      mk('base', 'Box'),
+      mk('lid', 'Lid'),
+      mk('i1', 'Box – circle', 'inlay', 'base'),
+      mk('i2', 'Box – circle 2', 'inlay', 'base'),
+      mk('i3', 'Lid – !!!', 'inlay', 'lid'),
+      mk('i4', 'Lid – 猫', 'inlay', 'lid'),
+      mk('i5', 'Lid – Привет', 'inlay', 'lid'),
+      mk('i6', 'Box – ★', 'inlay', 'base'),
+      mk('i7', 'Lid – inlay', 'inlay', 'lid'),
+    ];
+    const names = stlFileNames('Workshop box', parts);
+    const files = parts.map((p) => names.get(p.id));
+    expect(new Set(files).size).toBe(parts.length);
+    expect(files.slice(0, 4)).toEqual(['workshop-box-box.stl', 'workshop-box-lid.stl', 'workshop-box-box-circle.stl', 'workshop-box-box-circle-2.stl']);
+    // A name with nothing to keep never takes the part's own file.
+    expect(files.filter((f) => f === 'workshop-box-lid.stl').length).toBe(1);
+  });
+
+  it('colour inlays with the same graphic name are numbered, so each has its own name', () => {
+    const a = placeGraphic(gfx({ id: 'a', x: -20 }), builtinShape('circle'));
+    const b = placeGraphic(gfx({ id: 'b', x: 20 }), builtinShape('circle'));
+    const res = runBuild({ id: 1, type: 'lidded', params: { ...DEFAULT_PARAMS } as BoxParams, graphics: [a, b], quality: 'draft' });
+    const inlays = res.parts.filter((p) => p.role === 'inlay').map((p) => p.name);
+    expect(inlays).toEqual(['Box – circle', 'Box – circle 2']);
+    const names = stlFileNames('Workshop box', res.parts);
+    expect(new Set(names.values()).size).toBe(res.parts.length);
+  });
+
+  it('control characters in a graphic name stay out of labels and 3MF files', () => {
+    const g = gfx({ source: { kind: 'text', text: 'A\u0007B\tC', font: 'archivo-black', align: 'center', lineSpacing: 1.1, letterSpacing: 0 } });
+    expect(graphicLabel(g)).toBe('A B C');
+    expect(graphicLabel(gfx({ source: { kind: 'text', text: '\u0007\n', font: 'archivo-black', align: 'center', lineSpacing: 1.1, letterSpacing: 0 } }))).toBe('Text');
+    // Long names are cut on whole characters, never through an emoji.
+    const long = graphicLabel(gfx({ source: { kind: 'text', text: '😀'.repeat(40), font: 'archivo-black', align: 'center', lineSpacing: 1.1, letterSpacing: 0 } }));
+    expect(Array.from(long).length).toBe(32);
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(long)).toBe(false);
+    const res = runBuild({ id: 1, type: 'tray', params: { ...DEFAULT_PARAMS } as BoxParams, graphics: [], quality: 'draft' });
+    const part = { ...res.parts[0], name: 'Tray \u0007\u001b' };
+    const model = strFromU8(unzipSync(to3MF([{ part, matrix: part.print, slot: 0 }], ['#2f8a87'], 'Box \u0000 one'))['3D/3dmodel.model']);
+    expect(model).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/);
+  });
+
+  it('following the sliding lid rim and corner advice clears the error', () => {
+    const blocking = (s: ReturnType<typeof setup>) => s.errors.filter((e) => /rim is left|rounded box corners/.test(e.text));
+    let checked = 0;
+    for (const radius of [0, 1, 2, 4, 6, 10, 14])
+      for (const grooveDepth of [0.5, 1, 2, 3, 3.4, 3.6, 4.5])
+        for (const lidInset of [4, 5, 8]) {
+          const over = { radius, grooveDepth, lidInset, width: 140, depth: 100, height: 40, slideLid: 5 };
+          const e = blocking(setup('sliding', over))[0];
+          if (!e) continue;
+          checked++;
+          const inset = /lid inset of at least ([\d.]+) mm/.exec(e.text);
+          expect(inset, e.text).toBeTruthy();
+          expect(Number(inset![1]), e.text).toBeGreaterThan(lidInset);
+          expect(blocking(setup('sliding', { ...over, lidInset: Number(inset![1]) })), e.text).toEqual([]);
+          const groove = /groove of at most ([\d.]+) mm/.exec(e.text);
+          if (groove) expect(blocking(setup('sliding', { ...over, grooveDepth: Number(groove[1]) })), e.text).toEqual([]);
+          const rad = /corner radius of at most ([\d.]+) mm/.exec(e.text);
+          if (rad) {
+            expect(Number(rad[1]), e.text).toBeLessThan(radius);
+            expect(blocking(setup('sliding', { ...over, radius: Number(rad[1]) })), e.text).toEqual([]);
+          }
+        }
+    expect(checked).toBeGreaterThan(20);
+    // The reviewer's case: square corners, a deep groove and the smallest inset.
+    expect(blocking(setup('sliding', { radius: 0, grooveDepth: 3.4, lidInset: 4 }))[0]?.text).toMatch(/^Only 0\.6 mm of rim is left outside the groove\. Use a lid inset of at least 4\.5 mm/);
+  });
+
+  it('the sliding box tip asks for supports exactly when a warning says they are needed', () => {
+    for (const height of [4, 6, 7, 8, 9, 10, 12, 15])
+      for (const lidInset of [4, 8])
+        for (const dimsMode of ['outer', 'inner'] as const)
+          for (const grooveDepth of [1, 3]) {
+            const s = setup('sliding', { height, lidInset, dimsMode, grooveDepth });
+            const needs = s.warnings.some((w) => /needs? supports/.test(w.text));
+            const tip = s.t.parts(s.p, s.R).find((x) => x.id === 'base')!.tip!;
+            expect(/with supports/.test(tip), `${height} ${lidInset} ${dimsMode} ${grooveDepth}: ${tip}`).toBe(needs);
+          }
+  });
+
+  it('following the too-short advice clears it, sized from the inside or the outside', () => {
+    for (const [dimsMode, height] of [['outer', 8], ['inner', 4]] as const) {
+      const s = setup('sliding', { height, lidInset: 8, dimsMode });
+      const w = s.warnings.find((x) => /too short for a/.test(x.text));
+      expect(w, dimsMode).toBeTruthy();
+      const tall = Number(/at least ([\d.]+) mm tall/.exec(w!.text)![1]);
+      expect(setup('sliding', { height: tall, lidInset: 8, dimsMode }).warnings.some((x) => /too short for a/.test(x.text)), `${dimsMode} ${tall}`).toBe(false);
+      // Not much more than needed: half a millimetre less is still too short.
+      expect(setup('sliding', { height: tall - 0.5, lidInset: 8, dimsMode }).warnings.some((x) => /too short for a/.test(x.text)), `${dimsMode} ${tall}`).toBe(true);
+    }
+  });
+
+  it('a new box keeps the AMS slots, the printer and the units', () => {
+    const setupFrom = { filaments: ['#111111', '#222222'], printer: 'bed350', units: 'in' as const };
+    const b = blankProject('sliding', setupFrom);
+    expect([b.filaments, b.printer, b.units, b.type]).toEqual([['#111111', '#222222'], 'bed350', 'in', 'sliding']);
+    expect(b.filaments).not.toBe(setupFrom.filaments);
+    expect([b.graphics, b.partSlots]).toEqual([[], {}]);
   });
 });

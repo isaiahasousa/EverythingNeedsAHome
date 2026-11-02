@@ -83,8 +83,10 @@ export function sampleProject(): Project {
   };
 }
 
-export function blankProject(type: BoxTypeId = 'tray'): Project {
-  return { ...sampleProject(), name: 'Untitled box', type, graphics: [], params: { ...DEFAULT_PARAMS } };
+/** An empty box. The printer setup (AMS colours, printer, units) carries over from `setup` when given. */
+export function blankProject(type: BoxTypeId = 'tray', setup?: Pick<Project, 'filaments' | 'printer' | 'units'>): Project {
+  const p: Project = { ...sampleProject(), name: 'Untitled box', type, graphics: [], params: { ...DEFAULT_PARAMS } };
+  return setup ? { ...p, filaments: [...setup.filaments], printer: setup.printer, units: setup.units } : p;
 }
 
 const MODES: GraphicMode[] = ['emboss', 'deboss', 'cut', 'inlay', 'lithophane'];
@@ -99,7 +101,9 @@ function num(v: unknown, fallback: number, min: number, max: number): number {
 
 /** Fill in a graphic from a file and keep its numbers within what the editor allows. */
 function normalizeGraphic(raw: Graphic, slots: number): Graphic {
-  const g = { ...newGraphic(String(raw.faceId), raw.source), ...raw };
+  // Files from before filament slots also carry a `color`, now replaced by `slot`.
+  const { color: _old, ...rest } = raw as Graphic & { color?: unknown };
+  const g = { ...newGraphic(String(raw.faceId), raw.source), ...rest };
   const s = { ...g.source } as GraphicSource & Record<string, unknown>;
   if (s.kind === 'shape') {
     s.sides = Math.round(num(s.sides, 5, 3, 24));

@@ -244,6 +244,31 @@ try {
     await dl.saveAs(file);
     check(fs.statSync(file).size > 0, `${label} downloads (${dl.suggestedFilename()})`);
   };
+  /**
+   * True when nothing of the print bed (warm brown, as are the parts on it) touches an edge of the 3D view:
+   * every plate is in frame. The toolbar and size readout are hidden for the screenshot.
+   */
+  const platesInView = async () => {
+    const canvas = await page.$('.viewport-canvas canvas');
+    await page.evaluate(() => document.querySelectorAll('.view-toolbar, .caliper').forEach((el) => (el.style.visibility = 'hidden')));
+    const png = (await canvas.screenshot()).toString('base64');
+    await page.evaluate(() => document.querySelectorAll('.view-toolbar, .caliper').forEach((el) => (el.style.visibility = '')));
+    return page.evaluate(async (b64) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(img, 0, 0);
+      const { data, width, height } = g.getImageData(0, 0, c.width, c.height);
+      const warm = (x, y) => data[(y * width + x) * 4] - data[(y * width + x) * 4 + 2] > 40;
+      for (let y = 0; y < height; y++) if (warm(1, y) || warm(width - 2, y)) return false;
+      for (let x = 0; x < width; x++) if (warm(x, 1) || warm(x, height - 2)) return false;
+      return true;
+    }, png);
+  };
   await grab('button:has-text("All parts, ready to slice")', '3MF');
   await grab('button:has-text("Every part as STL")', 'STL zip');
   await grab('button:has-text("Save project")', 'project file');
@@ -266,6 +291,15 @@ try {
   await settle();
   const plateRows = '.section:has(h3:has-text("Plates")) .part-row';
   check((await page.$$(plateRows)).length === 2, 'a lid in another colour goes on a plate of its own');
+  check(await page.isVisible('text=Sync your AMS in Bambu Studio first'), 'the plates say how many filaments Bambu Studio needs');
+  // In the Print bed view a bigger bed is framed again, so no plate is left cut off at the edge.
+  await page.click('.view-modes button:has-text("Print bed")');
+  await page.waitForTimeout(900);
+  await page.getByLabel('Printer bed').selectOption('bed350');
+  await page.waitForTimeout(1100);
+  check(await platesInView(), 'a bigger bed in the Print bed view is framed whole');
+  await page.getByLabel('Printer bed').selectOption('bed256');
+  await page.waitForTimeout(300);
   await grab('button:has-text("All 2 plates")', 'every plate (zip)');
   await grab(`${plateRows}:nth-child(2) button`, 'one plate (3MF)');
   await step(3);
@@ -273,6 +307,31 @@ try {
   await step(5);
   await settle();
   check((await page.$$(plateRows)).length === 1, 'back in one colour, one plate');
+  // Only the last slot can be removed, so the others keep their AMS numbers.
+  await step(3);
+  const slotCount = () => page.$$eval('.palette .slot-picker .slot:not(.add)', (els) => els.length);
+  await page.click('.palette .slot-picker .slot:nth-child(2)');
+  check(!(await page.isVisible('.palette-edit button:has-text("Remove slot")')), 'a slot in the middle cannot be removed');
+  for (let n = 4; n > 1; n--) {
+    await page.click(`.palette .slot-picker .slot:nth-child(${n})`);
+    await page.click(`.palette-edit button:has-text("Remove slot ${n}")`);
+  }
+  check((await slotCount()) === 1, 'slots come off the end');
+  // A colour inlay added while there is one slot prints in that slot (it used to point past the palette).
+  await step(4);
+  await page.click('.chip:has-text("Front")');
+  await page.click('.add-grid button:has-text("Shape")');
+  await page.click('.mode-grid button:has-text("Colour inlay")');
+  await settle();
+  await step(5);
+  await settle();
+  const plateText = (await page.textContent(`${plateRows}:nth-child(1)`)) ?? '';
+  check(!/with inlays in/.test(plateText), `a colour inlay added with one slot prints in it (${plateText.trim()})`);
+  await page.click('.step-title');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('Control+z');
+  await settle();
+  await step(3);
+  check((await slotCount()) === 4, 'undo brings the slots back');
   const problems = await verifyDownloads(downloads, () => {});
   check(problems.length === 0, `downloaded meshes are watertight and on the bed${problems.length ? ': ' + problems.join('; ') : ''}`);
 

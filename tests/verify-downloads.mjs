@@ -60,8 +60,9 @@ export async function verifyDownloads(dir, log = console.log) {
     }
     const items = [...xml.matchAll(/<item objectid="(\d+)"/g)].map((m) => m[1]);
     if (!items.length) problems.push(`${f}: build has no items`);
+    // One material per AMS slot; Bambu Studio itself goes by the filament numbers in model_settings.config.
     const colours = [...xml.matchAll(/<base name="[^"]*" displaycolor="(#[0-9A-F]{8})"/g)].map((m) => m[1]);
-    if (new Set(colours).size !== colours.length) problems.push(`${f}: two filaments share a colour, so Bambu Studio would merge them`);
+    if (!colours.length) problems.push(`${f}: no filament colours`);
     const config = zip['Metadata/model_settings.config'] ? strFromU8(zip['Metadata/model_settings.config']) : '';
     for (const id of items) {
       const entry = new RegExp(`<object id="${id}">(.*?)</object>`, 's').exec(config)?.[1] ?? '';

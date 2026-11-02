@@ -216,16 +216,16 @@ export function addFilament(hex: string) {
   update((p) => (p.filaments.length >= MAX_FILAMENTS ? p : { ...p, filaments: [...p.filaments, hex] }));
 }
 
-/** Remove a slot; parts and inlays that used it move to slot 1, and later slots move up one. */
-export function removeFilament(slot: number) {
+/** Remove the last slot, so the others keep matching their AMS positions. Parts and inlays that used it move to slot 1. */
+export function removeLastFilament() {
   update((p) => {
-    if (p.filaments.length <= 1 || slot >= p.filaments.length) return p;
-    const remap = (s: number) => (s === slot ? 0 : s > slot ? s - 1 : s);
+    const last = p.filaments.length - 1;
+    if (last < 1) return p;
     return {
       ...p,
-      filaments: p.filaments.filter((_, i) => i !== slot),
-      partSlots: Object.fromEntries(Object.entries(p.partSlots).map(([id, s]) => [id, remap(s)])),
-      graphics: p.graphics.map((g) => (remap(g.slot) === g.slot ? g : { ...g, slot: remap(g.slot) })),
+      filaments: p.filaments.slice(0, last),
+      partSlots: Object.fromEntries(Object.entries(p.partSlots).map(([id, s]) => [id, s === last ? 0 : s])),
+      graphics: p.graphics.map((g) => (g.slot === last ? { ...g, slot: 0 } : g)),
     };
   });
 }

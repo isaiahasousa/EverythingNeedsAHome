@@ -42,7 +42,11 @@ export function toSTL(items: { part: PartMesh; matrix: Mat4 }[], name = 'part'):
   return new Uint8Array(buf);
 }
 
-const esc = (s: string) => s.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]!);
+/** Text for XML: escaped, and without the characters XML 1.0 cannot hold (control characters, lone surrogates). */
+const esc = (s: string) =>
+  s
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '')
+    .replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]!);
 const num = (v: number) => {
   const r = Math.round(v * 1e5) / 1e5;
   return Object.is(r, -0) ? '0' : String(r);
@@ -60,30 +64,14 @@ function meshXML(part: PartMesh, matrix: Mat4): string {
 }
 
 /**
- * Each slot's colour, made distinct: Bambu Studio numbers a file's filaments by its distinct colours, so
- * two slots holding the same colour would merge. A repeat is nudged one step at a time until it is new.
- */
-function distinctColours(filaments: string[]): string[] {
-  const out: string[] = [];
-  for (const f of filaments) {
-    const v = parseInt(f.slice(1), 16);
-    // Step the blue channel away from its nearer limit, so it never carries into green.
-    const dir = (v & 0xff) >= 0x80 ? -1 : 1;
-    let hex = f.toUpperCase();
-    for (let step = 1; out.includes(hex) && step < 128; step++) hex = '#' + (v + dir * step).toString(16).padStart(6, '0').toUpperCase();
-    out.push(hex);
-  }
-  return out;
-}
-
-/**
  * 3MF package for one print bed. Each printable part becomes one object; a part with colour inlays becomes
  * an assembly whose components slicers load as parts of a single multi-material object. Every object and
- * part names its filament twice: as a colour (the palette, in AMS slot order) and, for Bambu Studio, as a
- * filament number in Metadata/model_settings.config.
+ * part names its filament twice: as a material of the palette (each AMS slot's colour, in slot order) and
+ * as a filament number in Metadata/model_settings.config, which is what Bambu Studio reads. It does not
+ * read the palette's colours.
  */
 export function to3MF(items: { part: PartMesh; matrix: Mat4; slot: number }[], filaments: string[], title: string): Uint8Array {
-  const colours = distinctColours(filaments);
+  const colours = filaments.map((f) => f.toUpperCase());
   const slotOf = (s: number) => Math.max(0, Math.min(colours.length - 1, s));
   let nextId = 2;
   const objects: string[] = [];
@@ -145,4 +133,29 @@ export function zipFiles(files: Record<string, Uint8Array>): Uint8Array {
 
 export function slug(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'box';
+}
+
+/**
+ * A file name for each part's STL, bodies first and then colour inlays, never the same twice. A colour
+ * inlay is named after its part and graphic; a graphic name with no letters or digits to keep (symbols,
+ * non-Latin text) becomes "<part>-inlay".
+ */
+export function stlFileNames(project: string, parts: PartMesh[]): Map<string, string> {
+  const names = new Map<string, string>();
+  const used = new Set<string>();
+  const pick = (base: string) => {
+    let name = base;
+    for (let k = 2; used.has(name); k++) name = `${base}-${k}`;
+    used.add(name);
+    return `${name}.stl`;
+  };
+  const bodies = parts.filter((p) => p.role === 'body');
+  for (const b of bodies) names.set(b.id, pick(`${slug(project)}-${slug(b.name)}`));
+  for (const inl of parts) {
+    const parent = inl.role === 'inlay' ? bodies.find((b) => b.id === inl.parentId) : undefined;
+    if (!parent) continue;
+    const own = slug(inl.name);
+    names.set(inl.id, pick(`${slug(project)}-${own === slug(parent.name) ? `${own}-inlay` : own}`));
+  }
+  return names;
 }

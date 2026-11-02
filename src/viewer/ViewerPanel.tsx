@@ -75,7 +75,8 @@ export function ViewerPanel() {
   }, [result, layout]);
   useEffect(() => viewer.current?.setView(view), [view]);
   useEffect(() => viewer.current?.setColors(filaments, partSlots), [filaments, partSlots]);
-  const plates = layout?.plates.length ?? 1;
+  // At least one bed, also while the settings can't be built and there is nothing to lay out.
+  const plates = Math.max(1, layout?.plates.length ?? 1);
   useEffect(() => {
     const b = printerById(printer);
     viewer.current?.setBed(b.w, b.d, plates);

@@ -187,13 +187,19 @@ export function runBuild(req: BuildRequest): BuildResult {
       }
       parts.push(toPartMesh(solid, { ...info, role: 'body' }, g.colorIds));
     }
+    // Each colour inlay is named after its part and graphic; graphics with the same name are numbered.
+    const named = new Set<string>();
     for (const [key, inlay] of Object.entries(g.inlays)) {
       const parent = infos.find((i) => i.id === inlay.partId);
       if (!parent || inlay.solid.isEmpty()) continue;
+      const base = `${parent.name} – ${inlay.label || 'inlay'}`;
+      let name = base;
+      for (let k = 2; named.has(name); k++) name = `${base} ${k}`;
+      named.add(name);
       parts.push(
         toPartMesh(
           inlay.solid,
-          { id: `inlay-${key.replace(/[^a-z0-9]/gi, '')}`, name: `${parent.name} – ${inlay.label}`, role: 'inlay', parentId: parent.id, print: parent.print, explode: parent.explode, open: parent.open },
+          { id: `inlay-${key.replace(/[^a-z0-9]/gi, '')}`, name, role: 'inlay', parentId: parent.id, print: parent.print, explode: parent.explode, open: parent.open },
           new Map(),
           inlay.slot,
         ),

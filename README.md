@@ -50,15 +50,20 @@ use the corner handles to scale and the top handle to rotate (snaps to 15°; hol
 
 Set the filament in each AMS slot (up to 16), then choose the slot each part prints with, and each colour
 inlay. Parts in different colours go on separate print beds (plates), so the AMS only changes filament on
-the layers that hold colour inlays. Parts that share a colour share a plate when they fit.
+the layers that hold colour inlays. Parts that share a colour share a plate when they fit. Only the last
+slot can be removed, so the slot numbers keep matching the AMS. Starting a new box keeps the slots, the
+printer and the units.
 
 ## Exports
 
 - **3MF** with every part laid out on your printer's bed in print orientation, turned 90° when that is how
   they fit: one file per plate (several plates arrive as a ZIP). Each part is one object, and each colour
-  inlay is its own named part of that object. Both carry their AMS slot as a colour and as a Bambu Studio
-  filament number, so they open in Bambu Studio set to the right slots.
-- **STL** per part, or all parts in a ZIP.
+  inlay is its own named part of that object. Both carry their AMS slot as a Bambu Studio filament number
+  (slot 1 is filament 1), and the file lists the slots' colours. Bambu Studio has only as many filaments
+  as its project: sync your AMS in Bambu Studio before opening the files, so it has at least as many as
+  the highest slot used. A part set to a number the project doesn't have prints with filament 1.
+- **STL** per part, or all parts in a ZIP. Colour inlays get files of their own, named after their part
+  and graphic.
 - **Project files** (`.project.json`) to save and reopen designs, including any fonts you uploaded. Work is
   also autosaved in the browser (projects too big for its usual storage, such as ones with large photos,
   are kept in the browser's IndexedDB instead).

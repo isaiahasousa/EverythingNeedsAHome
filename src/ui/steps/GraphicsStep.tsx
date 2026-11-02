@@ -116,7 +116,8 @@ async function addGraphic(face: FaceDef, source: GraphicSource, over: Partial<Gr
   } else {
     Object.assign(g, fitToFace(face, face.width / Math.max(1, face.height), 0.55), { lockAspect: false });
   }
-  update((p) => ({ ...p, graphics: [...p.graphics, g] }));
+  // A colour inlay starts in slot 2 when there is one, so it stands out from a part in slot 1.
+  update((p) => ({ ...p, graphics: [...p.graphics, { ...g, slot: Math.min(g.slot, p.filaments.length - 1) }] }));
   setUI({ selected: g.id, faceId: face.id });
 }
 

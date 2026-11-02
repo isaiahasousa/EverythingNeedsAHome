@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { DEFAULT_FILAMENTS, MAX_FILAMENTS, PRESET_COLOURS, slotName } from '../core/filaments';
-import { addFilament, removeFilament, setFilament, useProject } from '../state/store';
+import { useBodies } from '../state/buildController';
+import { addFilament, projectStore, removeLastFilament, setFilament, toast, useProject } from '../state/store';
 import { Swatches } from './controls';
 
 /** Black or white, whichever reads better on `hex`. */
@@ -35,6 +36,7 @@ export function SlotPicker({ value, onChange, label }: { value: number; onChange
 /** The filaments loaded in the AMS, in slot order: pick a slot to change its colour; add or remove slots. */
 export function FilamentPalette() {
   const filaments = useProject((p) => p.filaments);
+  const bodies = useBodies();
   const [open, setOpen] = useState(0);
   const slot = Math.min(open, filaments.length - 1);
   const add = () => {
@@ -59,13 +61,16 @@ export function FilamentPalette() {
           {slotName(filaments, slot)}: the filament loaded in AMS slot {slot + 1}.
         </span>
         <Swatches label={`Slot ${slot + 1} colour`} value={filaments[slot]} colors={PRESET_COLOURS} onChange={(hex) => setFilament(slot, hex)} />
-        {filaments.length > 1 && (
+        {filaments.length > 1 && slot === filaments.length - 1 && (
           <button
             type="button"
             className="btn small"
             onClick={() => {
-              removeFilament(slot);
+              const p = projectStore.get();
+              const used = bodies.some((b) => (p.partSlots[b.id] ?? 0) === slot) || p.graphics.some((g) => g.mode === 'inlay' && g.slot === slot);
+              removeLastFilament();
               setOpen(Math.max(0, slot - 1));
+              if (used) toast(`Parts and colour inlays that used slot ${slot + 1} now print with slot 1.`, 'warn');
             }}
           >
             Remove slot {slot + 1}

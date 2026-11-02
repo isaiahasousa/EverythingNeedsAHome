@@ -191,7 +191,7 @@ export function App() {
             className="btn ghost hide-narrow"
             title="Start over with an empty box (undo brings this one back)"
             onClick={() => {
-              replaceProject(blankProject(projectStore.get().type));
+              replaceProject(blankProject(projectStore.get().type, projectStore.get()));
               setUI({ step: 'type' });
               toast('Started a new box. Undo brings back the previous one.');
             }}

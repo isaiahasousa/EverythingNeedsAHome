@@ -41,6 +41,12 @@ function dovetail(W: number, D: number, H: number, inset: number, lt: number, g:
 /** Material left between a rounded outside corner (radius `r`) and a square corner `a` in from both sides. */
 const cornerMaterial = (r: number, a: number) => (a >= r ? a : r - Math.SQRT2 * (r - a));
 
+/** The dovetail reaches further out than the lid is thick: its overhang is steeper than 45°. */
+const steepGroove = (R: Resolved) => (R.g as number) > (R.lt as number) + 1e-9;
+
+/** Too short for the walls to lean in at 45° under the rim before they meet the floor. */
+const steepRim = (p: BoxParams, R: Resolved) => (R.H as number) - (R.lt as number) - ((R.se as number) - p.wall) < p.floor - EPS;
+
 export const sliding: BoxType = {
   id: 'sliding',
   name: 'Sliding lid',
@@ -85,16 +91,18 @@ export const sliding: BoxType = {
       { ...bottomFace('base', W, D, r, p.floor), innerRoom: floorRoom(R, p.floor, zc) },
     ];
   },
-  parts(_p, R) {
+  parts(p, R) {
     const D = R.D as number;
-    const gentle = (R.g as number) <= (R.lt as number) + 1e-9;
+    const steep = [steepGroove(R) && 'the dovetail groove', steepRim(p, R) && 'under the rim'].filter(Boolean);
     return [
       {
         id: 'base',
         name: 'Box',
         print: IDENTITY,
         explode: [0, 0, 0],
-        tip: gentle ? 'Print upright. The dovetail and the rim are gentle enough to print without supports.' : 'Print upright, with supports for the dovetail groove (its overhang is steeper than 45°).',
+        tip: steep.length
+          ? `Print upright, with supports for ${steep.join(' and ')} (steeper than 45°).`
+          : 'Print upright. The dovetail and the rim are gentle enough to print without supports.',
       },
       { id: 'lid', name: 'Sliding lid', print: IDENTITY, explode: [0, -(D * 0.75 + 10), 4], tip: 'Print flat, top facing up.' },
     ];
@@ -110,27 +118,38 @@ export const sliding: BoxType = {
       w.push({ level: 'error', text: `With ${fmt(p.tolerance)} mm of tolerance in a ${fmt(g)} mm groove the lid would lift straight out. Use less tolerance, or a deeper groove.` });
     else if (hold < 0.4)
       w.push({ level: 'warn', text: `The lid only reaches ${fmt(hold)} mm under the groove and may pop out when the box is squeezed. Use less tolerance or a deeper groove.` });
-    if (p.grooveDepth > se - 0.8)
-      w.push({ level: 'warn', text: `Only ${fmt(se - g)} mm of rim remains outside the groove. Use a larger lid inset or a shallower groove.` });
-    // The slot's square corners must stay inside the box's rounded outside corners.
+    // The rim outside the groove holds the lid in. Between the slot's square corners and the box's rounded
+    // outside corners it is thinner still. The groove asked for (not the one clamped to fit) sets the advice.
     const a = se - g;
+    const groove = Math.max(0.2, p.grooveDepth);
+    // Rim needed outside the groove: 0.8 mm, more where rounded outside corners cut into it.
+    const need = Math.max(0.8, r - (r - 0.8) / Math.SQRT2);
+    const minInset = ceilTo(groove + need, 0.5);
     const left = cornerMaterial(r, a);
-    if (left < 0.8 - EPS) {
-      const maxR = Math.floor(((Math.SQRT2 * a - 0.8) / (Math.SQRT2 - 1)) * 2 + EPS) / 2;
-      const minInset = ceilTo(g + r - (r - 0.8) / Math.SQRT2, 0.5);
+    if (a < 0.8 - EPS) {
+      const maxGroove = Math.floor((se - need) * 10 + EPS) / 10;
       w.push({
         level: 'error',
-        text: `The rounded box corners leave only ${fmt(Math.max(0, left))} mm around the lid's square corners. Use a corner radius of at most ${fmt(Math.max(0, maxR))} mm, or a lid inset of at least ${fmt(minInset)} mm.`,
+        text: `Only ${fmt(a)} mm of rim is left outside the groove. Use a lid inset of at least ${fmt(minInset)} mm${maxGroove >= 0.3 ? `, or a groove of at most ${fmt(maxGroove)} mm` : ''}.`,
+      });
+    } else if (left < 0.8 - EPS) {
+      const maxR = Math.floor(((Math.SQRT2 * a - 0.8) / (Math.SQRT2 - 1)) * 2 + EPS) / 2;
+      w.push({
+        level: 'error',
+        text: `The rounded box corners leave only ${fmt(Math.max(0, left))} mm around the lid's square corners. Use a corner radius of at most ${fmt(maxR)} mm, or a lid inset of at least ${fmt(minInset)} mm.`,
       });
     }
     if (p.slideLid < 1.6) w.push({ level: 'warn', text: 'A lid thinner than 1.6 mm may warp or snap.' });
-    if (g > lt + 1e-9)
+    if (steepGroove(R))
       w.push({ level: 'warn', text: `The groove is deeper than the lid is thick, so the dovetail overhang is steeper than 45° and needs supports. Use a lid at least ${fmt(g)} mm thick or a shallower groove.` });
-    if ((R.H as number) - lt - (se - p.wall) < p.floor - EPS)
+    if (steepRim(p, R)) {
+      // Inside sizing gives the clear height under the lid; outside sizing the whole box.
+      const tall = p.dimsMode === 'inner' ? `at least ${fmt(ceilTo(se - p.wall, 0.5))} mm tall inside` : `at least ${fmt(ceilTo(p.floor + lt + se - p.wall, 0.5))} mm tall`;
       w.push({
         level: 'warn',
-        text: `The box is too short for a ${fmt(se)} mm rim: under it the walls lean in more steeply than 45° and need supports. Make the box at least ${fmt(ceilTo(p.floor + lt + se - p.wall, 0.5))} mm tall or use a smaller lid inset.`,
+        text: `The box is too short for a ${fmt(se)} mm rim: under it the walls lean in more steeply than 45° and need supports. Make the box ${tall} or use a smaller lid inset.`,
       });
+    }
     return w;
   },
   build(p, R) {

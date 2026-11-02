@@ -189,9 +189,12 @@ export class Viewer {
 
   /** The printer's bed, drawn `plates` times side by side (a plate per filament colour). */
   setBed(w: number, d: number, plates = 1) {
+    plates = Math.max(1, plates);
     if (w === this.bed.w && d === this.bed.d && plates === this.bed.plates) return;
     this.bed = { w, d, plates };
     this.buildPlate();
+    // A new printer, or a plate added for another colour: frame every plate again.
+    if (this.view === 'print') this.startAnim(true);
   }
 
   private buildPlate() {
@@ -331,10 +334,33 @@ export class Viewer {
     const radius = Math.max(10, size.length() / 2);
     const fov = (this.camera.fov * Math.PI) / 180;
     const aspect = Math.max(0.4, this.camera.aspect);
-    const dist = (radius / Math.sin(fov / 2)) * (aspect < 1 ? 1 / aspect : 1) * 0.92;
     const dir = this.view === 'print' ? new THREE.Vector3(0.35, -1, 0.95) : new THREE.Vector3(0.72, -1.15, 0.78);
     dir.normalize();
+    // The usual framing, moved back where needed so every corner of the box is in view with a margin: a
+    // long row of plates seen at an angle is wider than its bounding sphere suggests.
+    let dist = (radius / Math.sin(fov / 2)) * (aspect < 1 ? 1 / aspect : 1) * 0.92;
+    const right = new THREE.Vector3().crossVectors(this.camera.up, dir).normalize();
+    const up = new THREE.Vector3().crossVectors(dir, right);
+    const tanV = Math.tan(fov / 2) / 1.08;
+    const tanH = (Math.tan(fov / 2) * this.camera.aspect) / 1.08;
+    for (let i = 0; i < 8; i++) {
+      const v = new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).sub(center);
+      const toward = v.dot(dir);
+      dist = Math.max(dist, toward + Math.abs(v.dot(right)) / tanH, toward + Math.abs(v.dot(up)) / tanV);
+    }
     return { pos: center.clone().addScaledVector(dir, dist), target: center };
+  }
+
+  /** Keep the near and far clipping planes around the model as the camera moves in and out. */
+  private updateClipping() {
+    const dist = this.camera.position.distanceTo(this.controls.target);
+    const near = Math.max(1, dist / 400);
+    const far = Math.max(5000, dist * 6);
+    if (Math.abs(near - this.camera.near) > 0.01 * near || Math.abs(far - this.camera.far) > 0.01 * far) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   fit(animate = true) {
@@ -528,11 +554,13 @@ export class Viewer {
     if (this.controls.update()) this.dirty = true;
     if (!this.dirty) return;
     this.dirty = false;
+    this.updateClipping();
     this.renderer.render(this.scene, this.camera);
   }
 
   /** PNG snapshot of the current view (used for the gallery thumbnail in project files). */
   snapshot(): string {
+    this.updateClipping();
     this.renderer.render(this.scene, this.camera);
     return this.renderer.domElement.toDataURL('image/png');
   }

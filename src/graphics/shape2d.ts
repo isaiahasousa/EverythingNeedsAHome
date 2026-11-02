@@ -38,8 +38,11 @@ export function placementMatrix(g: Graphic, s: Shape2D): [number, number, number
 /** A short name for a graphic: its text, file name, or shape. */
 export function graphicLabel(g: Graphic): string {
   const s = g.source;
-  const name = s.kind === 'text' ? s.text.split('\n').find((l) => l.trim())?.trim() || 'Text' : s.kind === 'shape' ? s.shape : s.kind === 'pattern' ? `${s.pattern} vents` : s.name.replace(/\.[a-z0-9]+$/i, '');
-  return name.length > 32 ? `${name.slice(0, 31)}…` : name;
+  const raw = s.kind === 'text' ? (s.text.split('\n').find((l) => l.trim()) ?? '') : s.kind === 'shape' ? s.shape : s.kind === 'pattern' ? `${s.pattern} vents` : s.name.replace(/\.[a-z0-9]+$/i, '');
+  // One line of plain text: control characters cannot go into file names or 3MF files.
+  const name = raw.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim() || (s.kind === 'text' ? 'Text' : 'Image');
+  const chars = Array.from(name);
+  return chars.length > 32 ? `${chars.slice(0, 31).join('')}…` : name;
 }
 
 export function placeGraphic(g: Graphic, s: Shape2D): PlacedGraphic {

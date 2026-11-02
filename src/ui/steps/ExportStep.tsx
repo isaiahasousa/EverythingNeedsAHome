@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { slotName } from '../../core/filaments';
 import { layoutPlates, printerById, PRINTERS, soloMatrix, type Plate, type PlateLayout } from '../../export/layout';
-import { slug, to3MF, toSTL, zipFiles } from '../../export/meshio';
+import { slug, stlFileNames, to3MF, toSTL, zipFiles } from '../../export/meshio';
 import { saveFile, savesAreZipped } from '../../export/save';
 import type { PartMesh } from '../../core/types';
 import { normalizeProject } from '../../state/project';
@@ -74,6 +74,11 @@ export function ExportStep() {
   // Only a finished build of the current settings can be downloaded.
   const ready = status === 'ready' && bodies.length > 0;
   const plateCount = layout?.plates.length ?? 0;
+  const stlNames = useMemo(() => stlFileNames(name, parts), [name, parts]);
+  // The highest filament number any part or colour inlay prints with (slot 1 is filament 1).
+  const filamentsUsed = layout
+    ? Math.max(1, ...layout.plates.map((plate) => plate.slot + 1), ...inlays.filter((x) => layout.plates.some((plate) => plate.bodies.includes(x.parentId ?? ''))).map((x) => (x.slot ?? 0) + 1))
+    : 1;
 
   const run = async (fn: () => Promise<void> | void) => {
     setBusy(true);
@@ -126,10 +131,11 @@ export function ExportStep() {
             onClick={() =>
               run(() => {
                 const files: Record<string, Uint8Array> = {};
-                for (const b of bodies) files[`${slug(name)}-${slug(b.name)}.stl`] = toSTL([{ part: b, matrix: soloMatrix(b) }], b.name);
+                for (const b of bodies) files[stlNames.get(b.id)!] = toSTL([{ part: b, matrix: soloMatrix(b) }], b.name);
                 for (const inl of inlays) {
                   const parent = bodies.find((b) => b.id === inl.parentId);
-                  if (parent) files[`${slug(name)}-${slug(inl.name)}.stl`] = toSTL([{ part: inl, matrix: soloMatrix(parent) }], inl.name);
+                  const file = stlNames.get(inl.id);
+                  if (parent && file) files[file] = toSTL([{ part: inl, matrix: soloMatrix(parent) }], inl.name);
                 }
                 return deliver(`${slug(name)}-stl.zip`, zipFiles(files), 'application/zip');
               })
@@ -176,6 +182,11 @@ export function ExportStep() {
               Parts in different colours print on separate plates, so the AMS only changes filament for colour inlays. Choose part colours in the Details step.
             </div>
           )}
+          {filamentsUsed > 1 && (
+            <div className="field-help" style={{ marginTop: 0 }}>
+              Each part opens in Bambu Studio set to its slot&apos;s filament number (slot 1 is filament 1). Sync your AMS in Bambu Studio first, so the project has at least {filamentsUsed} filaments: a part set to a number the project doesn&apos;t have prints with filament 1.
+            </div>
+          )}
         </section>
       )}
 
@@ -188,7 +199,7 @@ export function ExportStep() {
             return (
               <li key={p.id} className="part-row">
                 <strong>{p.name}</strong>
-                <button type="button" className="btn small" disabled={!ready || busy} onClick={() => run(() => deliver(`${slug(name)}-${slug(p.name)}.stl`, stlFor(p), 'model/stl'))}>
+                <button type="button" className="btn small" disabled={!ready || busy} onClick={() => run(() => deliver(stlNames.get(p.id) ?? `${slug(name)}-${slug(p.name)}.stl`, stlFor(p), 'model/stl'))}>
                   <Icon name="download" /> STL
                 </button>
                 <span className="meta">
