@@ -1511,3 +1511,71 @@ input[type='range'] {
     animation: none !important;
   }
 }
+
+/* ---------------------------------------------------------------- filament slots */
+
+.slot-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.slot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  font: 600 11px/1 var(--font-mono);
+}
+
+.slot[aria-pressed='true']::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+}
+
+.slot.add {
+  background: var(--panel);
+  color: var(--ink);
+  border-style: dashed;
+  font-size: 16px;
+}
+
+.palette {
+  display: grid;
+  gap: 12px;
+}
+
+.palette-edit {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+.part-slots {
+  display: grid;
+  gap: 10px;
+}
+
+.part-slots > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.slot-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  vertical-align: -1px;
+  margin-right: 4px;
+}

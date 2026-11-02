@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { MAX_FILAMENTS } from '../core/filaments';
 import type { BuildResult, Graphic } from '../core/types';
 import { registerSavedFonts } from '../graphics/text';
 import { pauseAutosave } from './persist';
@@ -204,6 +205,34 @@ export function updateGraphic(id: string, patch: Partial<Graphic> | ((g: Graphic
     }),
     key ? `g:${id}:${key}` : '',
   );
+}
+
+/** Change the colour of an AMS slot. */
+export function setFilament(slot: number, hex: string) {
+  update((p) => (p.filaments[slot] === hex ? p : { ...p, filaments: p.filaments.map((c, i) => (i === slot ? hex : c)) }), `filament:${slot}`);
+}
+
+export function addFilament(hex: string) {
+  update((p) => (p.filaments.length >= MAX_FILAMENTS ? p : { ...p, filaments: [...p.filaments, hex] }));
+}
+
+/** Remove a slot; parts and inlays that used it move to slot 1, and later slots move up one. */
+export function removeFilament(slot: number) {
+  update((p) => {
+    if (p.filaments.length <= 1 || slot >= p.filaments.length) return p;
+    const remap = (s: number) => (s === slot ? 0 : s > slot ? s - 1 : s);
+    return {
+      ...p,
+      filaments: p.filaments.filter((_, i) => i !== slot),
+      partSlots: Object.fromEntries(Object.entries(p.partSlots).map(([id, s]) => [id, remap(s)])),
+      graphics: p.graphics.map((g) => (remap(g.slot) === g.slot ? g : { ...g, slot: remap(g.slot) })),
+    };
+  });
+}
+
+/** Choose the filament a part prints with. */
+export function setPartSlot(partId: string, slot: number) {
+  update((p) => ((p.partSlots[partId] ?? 0) === slot ? p : { ...p, partSlots: { ...p.partSlots, [partId]: slot } }));
 }
 
 export function setUI(patch: Partial<UIState>) {

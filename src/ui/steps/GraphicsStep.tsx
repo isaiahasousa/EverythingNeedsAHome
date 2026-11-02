@@ -6,9 +6,10 @@ import { shapePathData, shapeSize } from '../../graphics/shape2d';
 import { builtinShape, PATTERNS, SHAPES } from '../../graphics/shapes';
 import { customFontName, FONTS, fontUrl, registerCustomFont } from '../../graphics/text';
 import { graphicsOnFace, useFaces } from '../../state/buildController';
-import { FILAMENTS, newGraphic, withFont } from '../../state/project';
+import { newGraphic, withFont } from '../../state/project';
 import { projectStore, setUI, toast, update, updateGraphic, useBuild, useProject, useUI } from '../../state/store';
-import { NumberField, Segmented, Select, Slider, Swatches, Toggle } from '../controls';
+import { NumberField, Segmented, Select, Slider, Toggle } from '../controls';
+import { SlotPicker } from '../Filaments';
 import { Icon, ModeIcon, type IconName } from '../icons';
 import { lengthProps } from '../ParamField';
 import { Notes } from './BasicSteps';
@@ -17,7 +18,7 @@ export const MODE_LABEL: Record<GraphicMode, string> = {
   emboss: 'Raised',
   deboss: 'Engraved',
   cut: 'Cut out',
-  inlay: 'Inlay',
+  inlay: 'Colour inlay',
   lithophane: 'Lithophane',
 };
 
@@ -25,7 +26,7 @@ const MODE_HELP: Record<GraphicMode, string> = {
   emboss: 'Stands out from the surface. Keep it under 1 mm on walls so the overhang prints cleanly.',
   deboss: 'Engraved into the surface. Prints cleanly in any orientation.',
   cut: 'Cuts all the way through the wall: windows, vents, stencils.',
-  inlay: 'Engraved pocket plus a matching fill part for a second filament colour. Exports as one multi-part object in the 3MF.',
+  inlay: 'Engraved into the part at the depth you set, plus a separate colour body that fills it and prints in place: the AMS swaps filament only on those layers. In the 3MF it is its own part, named after the graphic and set to its AMS slot.',
   lithophane: 'The image becomes a thin relief that shows the picture when light shines through. Print in white.',
 };
 
@@ -347,6 +348,7 @@ function GraphicRow({ g, selected }: { g: Graphic; selected: boolean }) {
 
 function Inspector({ g, face, faces }: { g: Graphic; face: FaceDef; faces: FaceDef[] }) {
   const units = useProject((p) => p.units);
+  const slots = useProject((p) => p.filaments.length);
   useShapeVersion(g);
   const err = shapeError(g);
   const L = lengthProps(units, 0.5);
@@ -419,12 +421,16 @@ function Inspector({ g, face, faces }: { g: Graphic; face: FaceDef; faces: FaceD
             <NumberField label="Thickest (black)" value={g.lithoMax} min={0.8} max={8} {...lengthProps(units, 0.1)} onChange={(v) => set({ lithoMax: v }, 'lmax')} />
           </>
         )}
-        {g.mode !== 'lithophane' && (
+        {g.mode === 'inlay' ? (
           <div>
             <div className="field-label static" style={{ marginBottom: 6 }}>
-              {g.mode === 'inlay' ? 'Inlay filament' : 'Preview colour'}
+              Filament (AMS slot)
             </div>
-            <Swatches label="Graphic colour" value={g.color} colors={FILAMENTS} onChange={(hex) => set({ color: hex }, 'color')} />
+            <SlotPicker label="Inlay filament" value={Math.min(g.slot, slots - 1)} onChange={(slot) => set({ slot }, 'slot')} />
+          </div>
+        ) : (
+          <div className="field-help" style={{ marginTop: 0 }}>
+            Prints in the part's own filament. For another colour, use Colour inlay.
           </div>
         )}
       </div>

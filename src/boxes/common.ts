@@ -40,7 +40,7 @@ export const F = {
   wall: { kind: 'length', key: 'wall', label: 'Wall thickness', min: 0.8, max: 10, step: 0.1, help: 'Use a multiple of your line width, e.g. 1.6 or 2.0 mm for a 0.4 mm nozzle.' } as ParamDef,
   floor: { kind: 'length', key: 'floor', label: 'Floor thickness', min: 0.6, max: 10, step: 0.1 } as ParamDef,
   radius: { kind: 'length', key: 'radius', label: 'Corner radius', min: 0, max: 60, step: 0.5, help: 'Rounds the vertical edges.' } as ParamDef,
-  tolerance: { kind: 'length', key: 'tolerance', label: 'Fit clearance', min: 0, max: 1.5, step: 0.05, help: 'Gap between mating parts. 0.15-0.3 mm suits most printers.' } as ParamDef,
+  tolerance: { kind: 'length', key: 'tolerance', label: 'Tolerance', min: 0, max: 1.5, step: 0.05, help: 'Gap between parts that slide on or into each other. 0.1 mm suits a well-tuned printer; raise it if parts bind.' } as ParamDef,
 };
 
 // ------------------------------------------------------------- dims helpers

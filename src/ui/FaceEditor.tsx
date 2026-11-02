@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { filamentColour } from '../core/filaments';
 import type { FaceDef, Graphic, Shape2D } from '../core/types';
 import { peekShape, resolveShape } from '../graphics/resolve';
 import { placementMatrix, shapePathData } from '../graphics/shape2d';
@@ -28,6 +29,8 @@ const GraphicPaths = memo(function GraphicPaths({ shape, fill, stroke, hatch }: 
 function GraphicView({ g, face }: { g: Graphic; face: FaceDef }) {
   const [shape, setShape] = useState<Shape2D | undefined>(() => peekShape(g));
   const epoch = useOutlineEpoch();
+  const filaments = useProject((p) => p.filaments);
+  const partSlot = useProject((p) => p.partSlots[face.partId] ?? 0);
   useEffect(() => {
     let live = true;
     const now = peekShape(g);
@@ -59,7 +62,9 @@ function GraphicView({ g, face }: { g: Graphic; face: FaceDef }) {
     );
   }
   const m = placementMatrix(g, shape);
-  const fill = g.mode === 'cut' ? 'var(--ink)' : g.color;
+  // A colour inlay shows its filament; other effects are the part's own, shaded so they stand out.
+  const body = filamentColour(filaments, partSlot);
+  const fill = g.mode === 'cut' ? 'var(--ink)' : g.mode === 'inlay' ? filamentColour(filaments, g.slot) : shade(body, luminance(body) > 0.55 ? -0.3 : 0.3);
   return (
     <g transform={`matrix(${m.join(' ')})`} opacity={g.mode === 'cut' ? 0.78 : 1}>
       <GraphicPaths shape={shape} fill={fill} stroke={g.mode === 'cut' ? undefined : 'rgba(0,0,0,0.35)'} hatch={g.mode === 'deboss' || g.mode === 'inlay'} />
@@ -78,7 +83,8 @@ export function FaceEditor({ face, graphics }: { face: FaceDef; graphics: Graphi
   const [guides, setGuides] = useState<{ x: boolean; y: boolean }>({ x: false, y: false });
   const [angleTag, setAngleTag] = useState<number | null>(null);
   const units = useProject((p) => p.units);
-  const bodyColor = useProject((p) => p.color);
+  const filaments = useProject((p) => p.filaments);
+  const bodyColor = filamentColour(filaments, useProject((p) => p.partSlots[face.partId] ?? 0));
   const light = luminance(bodyColor) > 0.55;
   const gridInk = light ? 'rgba(0,0,0,0.13)' : 'rgba(255,255,255,0.16)';
   const gridInkMajor = light ? 'rgba(0,0,0,0.24)' : 'rgba(255,255,255,0.3)';
@@ -310,6 +316,14 @@ export function FaceEditor({ face, graphics }: { face: FaceDef; graphics: Graphi
       </div>
     </div>
   );
+}
+
+/** `hex` mixed towards white (amount > 0) or black (amount < 0). */
+function shade(hex: string, amount: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const to = amount > 0 ? 255 : 0;
+  const mix = (c: number) => Math.round(c + (to - c) * Math.abs(amount));
+  return `rgb(${mix((n >> 16) & 255)}, ${mix((n >> 8) & 255)}, ${mix(n & 255)})`;
 }
 
 function luminance(hex: string): number {

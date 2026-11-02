@@ -24,7 +24,8 @@ export function ViewerPanel() {
   const view = useUI((u) => u.view);
   const step = useUI((u) => u.step);
   const faceId = useUI((u) => u.faceId);
-  const color = useProject((p) => p.color);
+  const filaments = useProject((p) => p.filaments);
+  const partSlots = useProject((p) => p.partSlots);
   const printer = useProject((p) => p.printer);
   const units = useProject((p) => p.units);
   const type = useProject((p) => p.type);
@@ -73,11 +74,12 @@ export function ViewerPanel() {
     if (v && result && layout) v.setParts(result.parts, result.faces, layout.matrices);
   }, [result, layout]);
   useEffect(() => viewer.current?.setView(view), [view]);
-  useEffect(() => viewer.current?.setBodyColor(color), [color]);
+  useEffect(() => viewer.current?.setColors(filaments, partSlots), [filaments, partSlots]);
+  const plates = layout?.plates.length ?? 1;
   useEffect(() => {
     const b = printerById(printer);
-    viewer.current?.setBed(b.w, b.d);
-  }, [printer]);
+    viewer.current?.setBed(b.w, b.d, plates);
+  }, [printer, plates]);
   useEffect(() => viewer.current?.setEdges(edges), [edges]);
   const split = step === 'graphics';
   const first = useRef(true);

@@ -75,8 +75,8 @@ export function renderData(pos: Float32Array, idx: Uint32Array) {
 function toPartMesh(
   m: Manifold,
   info: { id: string; name: string; role: 'body' | 'inlay'; parentId?: string; print: Mat4; explode: Vec3; open?: PartInfo['open']; tip?: string },
-  colorIds: Map<number, string>,
-  bodyColor: string | null,
+  colorIds: Map<number, number>,
+  slot?: number,
 ): PartMesh {
   const mesh = m.getMesh();
   const np = mesh.numProp;
@@ -88,21 +88,21 @@ function toPartMesh(
     for (let i = 0; i < nv; i++) positions.set(mesh.vertProperties.subarray(i * np, i * np + 3), i * 3);
   }
   const tri = mesh.triVerts;
-  const materials: (string | null)[] = [bodyColor];
-  const matIndex = new Map<string, number>();
+  const materials: (number | null)[] = [null];
+  const matIndex = new Map<number, number>();
   const runMat: number[] = [];
   const runCount = mesh.runOriginalID?.length ?? 0;
   for (let r = 0; r < runCount; r++) {
-    const color = colorIds.get(mesh.runOriginalID[r]);
-    if (!color) {
+    const s = colorIds.get(mesh.runOriginalID[r]);
+    if (s === undefined) {
       runMat.push(0);
       continue;
     }
-    let idx = matIndex.get(color);
+    let idx = matIndex.get(s);
     if (idx === undefined) {
       idx = materials.length;
-      materials.push(color);
-      matIndex.set(color, idx);
+      materials.push(s);
+      matIndex.set(s, idx);
     }
     runMat.push(idx);
   }
@@ -136,6 +136,7 @@ function toPartMesh(
     ...renderData(positions, indices),
     groups,
     materials,
+    slot,
     print: info.print,
     explode: info.explode,
     open: info.open,
@@ -184,7 +185,7 @@ export function runBuild(req: BuildRequest): BuildResult {
         warnings.push({ level: 'error', text: `The ${info.name.toLowerCase()} could not be built with these graphics. Undo the last change or move the graphic.` });
         continue;
       }
-      parts.push(toPartMesh(solid, { ...info, role: 'body' }, g.colorIds, null));
+      parts.push(toPartMesh(solid, { ...info, role: 'body' }, g.colorIds));
     }
     for (const [key, inlay] of Object.entries(g.inlays)) {
       const parent = infos.find((i) => i.id === inlay.partId);
@@ -192,9 +193,9 @@ export function runBuild(req: BuildRequest): BuildResult {
       parts.push(
         toPartMesh(
           inlay.solid,
-          { id: `inlay-${key.replace(/[^a-z0-9]/gi, '')}`, name: `${parent.name} inlay ${inlay.color}`, role: 'inlay', parentId: parent.id, print: parent.print, explode: parent.explode, open: parent.open },
+          { id: `inlay-${key.replace(/[^a-z0-9]/gi, '')}`, name: `${parent.name} – ${inlay.label}`, role: 'inlay', parentId: parent.id, print: parent.print, explode: parent.explode, open: parent.open },
           new Map(),
-          inlay.color,
+          inlay.slot,
         ),
       );
     }

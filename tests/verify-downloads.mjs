@@ -39,35 +39,53 @@ export async function verifyDownloads(dir, log = console.log) {
     else if (Math.abs(bb.min[2]) > 0.01) problems.push(`${label}: does not sit on the bed (min z ${bb.min[2].toFixed(3)})`);
     m.delete();
   };
+  /**
+   * A 3MF: every mesh watertight and on the bed, and every object and colour part given an AMS filament
+   * (1 to the number of colours) in Metadata/model_settings.config, as Bambu Studio reads them.
+   */
+  const check3mf = (f, bytes) => {
+    const zip = unzipSync(bytes);
+    for (const need of ['[Content_Types].xml', '_rels/.rels', '3D/3dmodel.model', 'Metadata/model_settings.config'])
+      if (!zip[need]) problems.push(`${f}: missing ${need}`);
+    const xml = strFromU8(zip['3D/3dmodel.model']);
+    const objects = [...xml.matchAll(/<object id="(\d+)"[^>]*name="([^"]*)"[^>]*>(.*?)<\/object>/gs)];
+    for (const [, id, name, body] of objects) {
+      if (!body.includes('<mesh>')) {
+        log(`  assembly ${id} "${name}": components ${[...body.matchAll(/component objectid="(\d+)"/g)].map((m) => m[1]).join(', ')}`);
+        continue;
+      }
+      const verts = [...body.matchAll(/<vertex x="([^"]+)" y="([^"]+)" z="([^"]+)"\/>/g)].flatMap((m) => [+m[1], +m[2], +m[3]]);
+      const tris = [...body.matchAll(/<triangle v1="(\d+)" v2="(\d+)" v3="(\d+)"\/>/g)].flatMap((m) => [+m[1], +m[2], +m[3]]);
+      check(`3mf object ${id} ${name}`, verts, tris);
+    }
+    const items = [...xml.matchAll(/<item objectid="(\d+)"/g)].map((m) => m[1]);
+    if (!items.length) problems.push(`${f}: build has no items`);
+    const colours = [...xml.matchAll(/<base name="[^"]*" displaycolor="(#[0-9A-F]{8})"/g)].map((m) => m[1]);
+    if (new Set(colours).size !== colours.length) problems.push(`${f}: two filaments share a colour, so Bambu Studio would merge them`);
+    const config = zip['Metadata/model_settings.config'] ? strFromU8(zip['Metadata/model_settings.config']) : '';
+    for (const id of items) {
+      const entry = new RegExp(`<object id="${id}">(.*?)</object>`, 's').exec(config)?.[1] ?? '';
+      const used = [...entry.matchAll(/key="extruder" value="(\d+)"/g)].map((m) => +m[1]);
+      if (!used.length) problems.push(`${f}: object ${id} has no filament in model_settings.config`);
+      for (const e of used) if (e < 1 || e > colours.length) problems.push(`${f}: object ${id} uses filament ${e} of ${colours.length}`);
+      const parts = [...entry.matchAll(/<part id="(\d+)"/g)].map((m) => m[1]);
+      log(`  object ${id}: filament${used.length > 1 ? 's' : ''} ${used.join(', ')}${parts.length ? ` (parts ${parts.join(', ')})` : ''}`);
+    }
+  };
   const files = fs.readdirSync(dir).filter((f) => /\.(3mf|stl|zip|json)$/i.test(f));
   if (!files.length) problems.push(`no exported files found in ${dir}`);
   for (const f of files) {
     const buf = fs.readFileSync(path.join(dir, f));
     log(f);
     try {
-      if (/\.3mf$/i.test(f)) {
-        const zip = unzipSync(new Uint8Array(buf));
-        for (const need of ['[Content_Types].xml', '_rels/.rels', '3D/3dmodel.model'])
-          if (!zip[need]) problems.push(`${f}: missing ${need}`);
-        const xml = strFromU8(zip['3D/3dmodel.model']);
-        const objects = [...xml.matchAll(/<object id="(\d+)"[^>]*name="([^"]*)"[^>]*>(.*?)<\/object>/gs)];
-        for (const [, id, name, body] of objects) {
-          if (!body.includes('<mesh>')) {
-            log(`  assembly ${id} "${name}": components ${[...body.matchAll(/component objectid="(\d+)"/g)].map((m) => m[1]).join(', ')}`);
-            continue;
-          }
-          const verts = [...body.matchAll(/<vertex x="([^"]+)" y="([^"]+)" z="([^"]+)"\/>/g)].flatMap((m) => [+m[1], +m[2], +m[3]]);
-          const tris = [...body.matchAll(/<triangle v1="(\d+)" v2="(\d+)" v3="(\d+)"\/>/g)].flatMap((m) => [+m[1], +m[2], +m[3]]);
-          check(`3mf object ${id} ${name}`, verts, tris);
-        }
-        if (!/<item objectid="\d+"/.test(xml)) problems.push(`${f}: build has no items`);
-      } else if (/\.zip$/i.test(f)) {
+      if (/\.3mf$/i.test(f)) check3mf(f, new Uint8Array(buf));
+      else if (/\.zip$/i.test(f)) {
         const zip = unzipSync(new Uint8Array(buf));
         for (const [name, data] of Object.entries(zip)) {
           if (/\.stl$/i.test(name)) {
             const { verts, tris } = parseSTL(data);
             check(name, verts, tris);
-          } else if (/\.3mf$/i.test(name)) log(`  (nested 3MF ${name})`);
+          } else if (/\.3mf$/i.test(name)) check3mf(`${f}/${name}`, data);
         }
       } else if (/\.stl$/i.test(f)) {
         const { verts, tris } = parseSTL(new Uint8Array(buf));

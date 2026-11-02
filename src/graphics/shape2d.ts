@@ -35,6 +35,13 @@ export function placementMatrix(g: Graphic, s: Shape2D): [number, number, number
   return [a, b, cc, d, e, f];
 }
 
+/** A short name for a graphic: its text, file name, or shape. */
+export function graphicLabel(g: Graphic): string {
+  const s = g.source;
+  const name = s.kind === 'text' ? s.text.split('\n').find((l) => l.trim())?.trim() || 'Text' : s.kind === 'shape' ? s.shape : s.kind === 'pattern' ? `${s.pattern} vents` : s.name.replace(/\.[a-z0-9]+$/i, '');
+  return name.length > 32 ? `${name.slice(0, 31)}…` : name;
+}
+
 export function placeGraphic(g: Graphic, s: Shape2D): PlacedGraphic {
   const [a, b, c, d, e, f] = placementMatrix(g, s);
   const layers = s.layers.map((l) => ({
@@ -46,7 +53,8 @@ export function placeGraphic(g: Graphic, s: Shape2D): PlacedGraphic {
     faceId: g.faceId,
     mode: g.mode,
     depth: g.depth,
-    color: g.color,
+    slot: g.slot,
+    label: graphicLabel(g),
     layers,
     frame: { x: g.x, y: g.y, w: g.w, h: g.h, rotation: g.rotation, mirror: g.mirror },
   };

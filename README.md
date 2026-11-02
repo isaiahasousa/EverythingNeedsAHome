@@ -15,7 +15,7 @@ which come from Google Fonts. The fonts used for text on boxes are bundled with 
 | --- | --- |
 | Open tray | Open box with an optional grid of compartments |
 | Box with lid | Inset plug, flush step, or slip-over cap lid; optional snap bumps |
-| Sliding lid | Dovetail lid that slides in from the front and sits flush; optional thumb grip |
+| Sliding lid | Square-cornered dovetail lid that slides in from the front and sits flush, at least 4 mm in from the sides (adjustable) inside a solid rim; optional thumb grip |
 | Hinged box | Knuckle hinge with a 1.75 mm filament pin (or a printed pin), alignment lip, finger notch |
 | Drawer cabinet | Sleeve with 1 to 8 drawers, ledge-tab or finger-notch pulls |
 | Polygon box | 3 to 12 sides, with any of the lid styles |
@@ -24,9 +24,10 @@ which come from Google Fonts. The fonts used for text on boxes are bundled with 
 
 Every part is laid out to print without supports at sensible settings. When a setting would need supports or
 weaken a part (knuckles too big for a short hinged box, raised graphics facing the print bed, walls that are
-too thin), the app tells you. Clearances (lid fit, drawer gap, thread gap) are adjustable, and the geometry
-tests check that mating parts never intersect: the hinge swings 180° clear, the cap unscrews, drawers and
-the sliding lid slide out, and Gridfinity bins stack.
+too thin), the app tells you. Fits are adjustable: parts that slide on or into each other (lids, the sliding
+lid, drawers) default to a 0.1 mm tolerance, and screw threads and hinge pins to 0.4 mm. The geometry tests
+check that mating parts never intersect: the hinge swings 180° clear, the cap unscrews, drawers and the
+sliding lid slide out, and Gridfinity bins stack.
 
 ## Graphics
 
@@ -37,17 +38,26 @@ use the corner handles to scale and the top handle to rotate (snaps to 15°; hol
   looks the same when you reopen it), PNG/JPG/WebP images (traced to outlines with an
   adjustable threshold), SVG files (fills with their fill rules, strokes outlined), 12 built-in shapes,
   and vent patterns (honeycomb, round, slots, squares, diamonds).
-- **Effects:** raised, engraved, cut through, inlay (a pocket plus a matching fill part for a second filament
-  colour), and lithophane (photo relief that shows the picture when backlit).
+- **Effects:** raised, engraved, cut through, colour inlay (engraved at the depth you set, plus a separate
+  colour body that fills it and prints in place), and lithophane (photo relief that shows the picture when
+  backlit). Every effect except colour inlay prints in its part's own filament.
 - Graphics wrap around curved surfaces such as the jar body.
 - Graphics stack in the order you add them: a later one sits on, or cuts into, the ones before it. Raise a
   name on a raised plate, or inlay white letters on a coloured disc.
 - Drop or paste an image anywhere in the app to add it to the current face.
 
+## Colours (AMS)
+
+Set the filament in each AMS slot (up to 16), then choose the slot each part prints with, and each colour
+inlay. Parts in different colours go on separate print beds (plates), so the AMS only changes filament on
+the layers that hold colour inlays. Parts that share a colour share a plate when they fit.
+
 ## Exports
 
 - **3MF** with every part laid out on your printer's bed in print orientation, turned 90° when that is how
-  they fit. Inlays come in as parts of a single multi-material object, ready for an AMS / MMU.
+  they fit: one file per plate (several plates arrive as a ZIP). Each part is one object, and each colour
+  inlay is its own named part of that object. Both carry their AMS slot as a colour and as a Bambu Studio
+  filament number, so they open in Bambu Studio set to the right slots.
 - **STL** per part, or all parts in a ZIP.
 - **Project files** (`.project.json`) to save and reopen designs, including any fonts you uploaded. Work is
   also autosaved in the browser (projects too big for its usual storage, such as ones with large photos,

@@ -258,6 +258,21 @@ try {
   check(await page.$$eval('.big-actions button, .part-row button', (bs) => bs.length > 0 && bs.every((b) => !b.disabled)), 'downloads switch back on when the rebuild is done');
   await page.keyboard.press('Control+Shift+z');
   await settle();
+  // AMS colours: a lid in its own filament moves to a plate of its own, and each plate downloads.
+  await step(3);
+  check((await page.$$eval('.palette .slot-picker .slot:not(.add)', (els) => els.length)) === 4, 'four AMS slots to start with');
+  await page.click('.part-slots > div:has-text("Lid") .slot:nth-child(2)');
+  await step(5);
+  await settle();
+  const plateRows = '.section:has(h3:has-text("Plates")) .part-row';
+  check((await page.$$(plateRows)).length === 2, 'a lid in another colour goes on a plate of its own');
+  await grab('button:has-text("All 2 plates")', 'every plate (zip)');
+  await grab(`${plateRows}:nth-child(2) button`, 'one plate (3MF)');
+  await step(3);
+  await page.click('.part-slots > div:has-text("Lid") .slot:nth-child(1)');
+  await step(5);
+  await settle();
+  check((await page.$$(plateRows)).length === 1, 'back in one colour, one plate');
   const problems = await verifyDownloads(downloads, () => {});
   check(problems.length === 0, `downloaded meshes are watertight and on the bed${problems.length ? ': ' + problems.join('; ') : ''}`);
 

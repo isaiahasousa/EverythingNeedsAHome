@@ -46,6 +46,7 @@ export interface BoxParams {
   snap: boolean;
   // sliding
   slideLid: number;
+  lidInset: number;
   grooveDepth: number;
   thumbGrip: boolean;
   // hinged
@@ -218,8 +219,8 @@ export interface Graphic {
   mode: GraphicMode;
   /** Relief / engraving depth (mm). */
   depth: number;
-  /** Preview colour, and the filament colour for inlays. */
-  color: string;
+  /** For a colour inlay, the filament (AMS slot, from 0) its separate colour body prints with. */
+  slot: number;
   /** Lithophane thickness range (mm). */
   lithoMin: number;
   lithoMax: number;
@@ -250,7 +251,10 @@ export interface PlacedGraphic {
   faceId: string;
   mode: GraphicMode;
   depth: number;
-  color: string;
+  /** Filament slot of a colour inlay's body. */
+  slot: number;
+  /** A short name for the graphic, given to its colour body in exported files. */
+  label: string;
   layers: ShapeLayer[];
   /** The placed frame (centre, size, rotation, mirror) — used for lithophane windows. */
   frame: { x: number; y: number; w: number; h: number; rotation: number; mirror: boolean };
@@ -288,8 +292,13 @@ export interface PartMesh {
   /** Feature-edge line segments (pairs of points) for the outline overlay. */
   edges: Float32Array;
   groups: MeshGroup[];
-  /** Colours by material index; index 0 is the body colour placeholder (null = use the filament colour). */
-  materials: (string | null)[];
+  /**
+   * Filament slots by material index, for the preview: null is the part's own filament (an inlay's own
+   * slot for an inlay body), a number is the slot of the colour inlay that pocket holds.
+   */
+  materials: (number | null)[];
+  /** The filament slot an inlay body prints with (bodies take theirs from the project). */
+  slot?: number;
   print: Mat4;
   explode: Vec3;
   open?: { axis: Vec3; angle: number; pivot: Vec3 };

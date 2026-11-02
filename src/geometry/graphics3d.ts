@@ -9,10 +9,10 @@ const OVERLAP = 0.3;
 
 export interface GraphicsOutcome {
   solids: Record<string, Manifold>;
-  /** Separate colour bodies keyed by `${partId}::${color}`. */
-  inlays: Record<string, { partId: string; color: string; solid: Manifold }>;
-  /** originalID -> colour, for painting graphic triangles in the preview. */
-  colorIds: Map<number, string>;
+  /** One separate colour body per colour inlay, keyed by `${partId}::${graphic id}`. */
+  inlays: Record<string, { partId: string; slot: number; label: string; solid: Manifold }>;
+  /** originalID -> filament slot, for painting the pockets of colour inlays in the preview. */
+  colorIds: Map<number, number>;
   warnings: Warning[];
 }
 
@@ -299,7 +299,6 @@ export function applyGraphics(
         const clipped = relief.intersect(slab(window, -(fitted.litho!.max + 2), 1));
         // Never outside the part (on a triangular box the relief would poke through the next side).
         const placed = placeOnFace(clipped, face).intersect(hullOf(face.partId)).asOriginal();
-        out.colorIds.set(placed.originalID(), g.color);
         if (!commit(face.partId, base, unionAll([base.subtract(hole), placed]), hole.volume(), label)) continue;
         grow(face.partId, base, (m) => unionAll([m.subtract(hole), placed]));
         clearFills(face.partId, hole);
@@ -328,7 +327,6 @@ export function applyGraphics(
       const regions = regionsOn(face.id, cs);
       if (g.mode === 'emboss') {
         const solid = raisedSolid(face, regions, depth).asOriginal();
-        out.colorIds.set(solid.originalID(), g.color);
         if (!commit(face.partId, base, base.add(solid), 0, label)) continue;
         grow(face.partId, base, (m) => m.add(solid));
         clearFills(face.partId, solid);
@@ -352,7 +350,7 @@ export function applyGraphics(
           });
       } else if (g.mode === 'deboss' || g.mode === 'inlay') {
         const cutter = pocketSolid(face, regions, depth, top).asOriginal();
-        out.colorIds.set(cutter.originalID(), g.color);
+        if (g.mode === 'inlay') out.colorIds.set(cutter.originalID(), g.slot);
         if (!commit(face.partId, base, base.subtract(cutter), cutter.volume(), label)) continue;
         if (regions.some((r) => r.cs.area() >= 0.01 && depth - r.h >= face.thickness))
           out.warnings.push({
@@ -363,16 +361,14 @@ export function applyGraphics(
         // A later graphic paints over earlier ones: its pocket takes the colour out of earlier inlays.
         clearFills(face.partId, cutter);
         if (g.mode === 'inlay') {
-          const key = `${face.partId}::${g.color.toLowerCase()}`;
           // The colour is the material the pocket took out, earlier marks included: flush with the surface
-          // around it, and flush inside a wall it goes through.
+          // around it, and flush inside a wall it goes through. Each inlay is its own body, so a slicer lists
+          // it by name and can give it any filament.
           const fill = cutter.intersect(envelopeOf(face.partId));
-          const prev = out.inlays[key];
-          out.inlays[key] = { partId: face.partId, color: g.color, solid: prev ? prev.solid.add(fill) : fill };
+          out.inlays[`${face.partId}::${g.id}`] = { partId: face.partId, slot: g.slot, label: g.label, solid: fill };
         }
       } else if (g.mode === 'cut') {
         const cutter = placeOnFace(slab(cs, -(face.thickness + OVERLAP), top), face).asOriginal();
-        out.colorIds.set(cutter.originalID(), g.color);
         if (!commit(face.partId, base, base.subtract(cutter), cutter.volume(), label)) continue;
         grow(face.partId, base, (m) => m.subtract(cutter));
         clearFills(face.partId, cutter);

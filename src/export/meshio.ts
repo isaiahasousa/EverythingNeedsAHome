@@ -60,56 +60,74 @@ function meshXML(part: PartMesh, matrix: Mat4): string {
 }
 
 /**
- * 3MF package. Each printable part becomes one object; a part with colour inlays becomes an
- * assembly whose components slicers load as parts of a single multi-material object.
+ * Each slot's colour, made distinct: Bambu Studio numbers a file's filaments by its distinct colours, so
+ * two slots holding the same colour would merge. A repeat is nudged one step at a time until it is new.
  */
-export function to3MF(items: { part: PartMesh; matrix: Mat4 }[], bodyColor: string, title: string): Uint8Array {
-  const colors: string[] = [bodyColor];
-  const colorIndex = (c: string) => {
-    const k = c.toLowerCase();
-    let i = colors.findIndex((x) => x.toLowerCase() === k);
-    if (i < 0) {
-      colors.push(c);
-      i = colors.length - 1;
-    }
-    return i;
-  };
+function distinctColours(filaments: string[]): string[] {
+  const out: string[] = [];
+  for (const f of filaments) {
+    const v = parseInt(f.slice(1), 16);
+    // Step the blue channel away from its nearer limit, so it never carries into green.
+    const dir = (v & 0xff) >= 0x80 ? -1 : 1;
+    let hex = f.toUpperCase();
+    for (let step = 1; out.includes(hex) && step < 128; step++) hex = '#' + (v + dir * step).toString(16).padStart(6, '0').toUpperCase();
+    out.push(hex);
+  }
+  return out;
+}
+
+/**
+ * 3MF package for one print bed. Each printable part becomes one object; a part with colour inlays becomes
+ * an assembly whose components slicers load as parts of a single multi-material object. Every object and
+ * part names its filament twice: as a colour (the palette, in AMS slot order) and, for Bambu Studio, as a
+ * filament number in Metadata/model_settings.config.
+ */
+export function to3MF(items: { part: PartMesh; matrix: Mat4; slot: number }[], filaments: string[], title: string): Uint8Array {
+  const colours = distinctColours(filaments);
+  const slotOf = (s: number) => Math.max(0, Math.min(colours.length - 1, s));
   let nextId = 2;
   const objects: string[] = [];
   const buildItems: string[] = [];
+  const settings: string[] = [];
+  const meta = (indent: string, key: string, value: string | number) => `${indent}<metadata key="${key}" value="${esc(String(value))}"/>`;
   for (const it of items) {
     if (it.part.role !== 'body') continue;
     const inlays = items.filter((x) => x.part.role === 'inlay' && x.part.parentId === it.part.id);
     const bodyId = nextId++;
-    objects.push(`<object id="${bodyId}" type="model" name="${esc(it.part.name)}" pid="1" pindex="0">${meshXML(it.part, it.matrix)}</object>`);
+    const bodySlot = slotOf(it.slot);
+    objects.push(`<object id="${bodyId}" type="model" name="${esc(it.part.name)}" pid="1" pindex="${bodySlot}">${meshXML(it.part, it.matrix)}</object>`);
     if (!inlays.length) {
       buildItems.push(`<item objectid="${bodyId}"/>`);
+      settings.push(`  <object id="${bodyId}">`, meta('    ', 'name', it.part.name), meta('    ', 'extruder', bodySlot + 1), '  </object>');
       continue;
     }
     const comps = [`<component objectid="${bodyId}"/>`];
+    const parts = [`    <part id="${bodyId}" subtype="normal_part">`, meta('      ', 'name', it.part.name), meta('      ', 'extruder', bodySlot + 1), '    </part>'];
     for (const inl of inlays) {
       const id = nextId++;
-      const ci = colorIndex(inl.part.materials[0] ?? bodyColor);
-      objects.push(`<object id="${id}" type="model" name="${esc(inl.part.name)}" pid="1" pindex="${ci}">${meshXML(inl.part, inl.matrix)}</object>`);
+      const s = slotOf(inl.slot);
+      objects.push(`<object id="${id}" type="model" name="${esc(inl.part.name)}" pid="1" pindex="${s}">${meshXML(inl.part, inl.matrix)}</object>`);
       comps.push(`<component objectid="${id}"/>`);
+      parts.push(`    <part id="${id}" subtype="normal_part">`, meta('      ', 'name', inl.part.name), meta('      ', 'extruder', s + 1), '    </part>');
     }
     const asm = nextId++;
-    objects.push(`<object id="${asm}" type="model" name="${esc(it.part.name)} (multi-colour)"><components>${comps.join('')}</components></object>`);
+    objects.push(`<object id="${asm}" type="model" name="${esc(it.part.name)}"><components>${comps.join('')}</components></object>`);
     buildItems.push(`<item objectid="${asm}"/>`);
+    settings.push(`  <object id="${asm}">`, meta('    ', 'name', it.part.name), meta('    ', 'extruder', bodySlot + 1), ...parts, '  </object>');
   }
-  const materials = colors
-    .map((c, i) => `<base name="${i === 0 ? 'Body' : 'Inlay ' + esc(c)}" displaycolor="${esc(c.toUpperCase())}FF"/>`)
-    .join('');
+  const materials = colours.map((c, i) => `<base name="Filament ${i + 1}" displaycolor="${c}FF"/>`).join('');
   const model =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">` +
     `<metadata name="Title">${esc(title)}</metadata><metadata name="Application">EverythingNeedsAHome</metadata>` +
     `<resources><basematerials id="1">${materials}</basematerials>${objects.join('')}</resources>` +
     `<build>${buildItems.join('')}</build></model>`;
+  const config = `<?xml version="1.0" encoding="UTF-8"?>\n<config>\n${settings.join('\n')}\n</config>\n`;
   const contentTypes =
     `<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
     `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
-    `<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>`;
+    `<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>` +
+    `<Default Extension="config" ContentType="text/xml"/></Types>`;
   const rels =
     `<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
     `<Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`;
@@ -117,6 +135,7 @@ export function to3MF(items: { part: PartMesh; matrix: Mat4 }[], bodyColor: stri
     '[Content_Types].xml': strToU8(contentTypes),
     '_rels/.rels': strToU8(rels),
     '3D/3dmodel.model': strToU8(model),
+    'Metadata/model_settings.config': strToU8(config),
   });
 }
 

@@ -106,6 +106,68 @@ export function layoutParts(parts: PartMesh[], bed: Printer): Layout {
   return { matrices, overflow, tooTall };
 }
 
+/** One print bed's worth of parts that print in the same filament. */
+export interface Plate {
+  /** The filament slot of its parts (their colour inlays bring their own). */
+  slot: number;
+  /** Body part ids on this plate; their inlays print with them. */
+  bodies: string[];
+  /** Placement on this plate's bed, per part id (inlays use their parent's). */
+  matrices: Map<string, Mat4>;
+}
+
+export interface PlateLayout {
+  plates: Plate[];
+  /** Every part placed for the view: plate `k` sits `k` beds (plus a gap) along +X. */
+  matrices: Map<string, Mat4>;
+  /** Parts too big for any bed, or taller than the printer allows. */
+  overflow: string[];
+  tooTall: string[];
+}
+
+/** Space between plates shown side by side (mm). */
+export const PLATE_GAP = 40;
+
+/**
+ * Put the bodies on plates. Parts of different filaments never share a plate: with an AMS, every layer
+ * that holds two colours costs a filament swap. Parts of one filament share as few plates as fit them.
+ */
+export function layoutPlates(parts: PartMesh[], bed: Printer, slotOf: (partId: string) => number): PlateLayout {
+  const bodies = parts.filter((p) => p.role === 'body');
+  const withInlays = (group: PartMesh[]) => parts.filter((p) => group.includes(p) || (p.role === 'inlay' && group.some((b) => b.id === p.parentId)));
+  const fits = (group: PartMesh[]) => layoutParts(withInlays(group), bed).overflow.length === 0;
+  const plates: Plate[] = [];
+  const overflow: string[] = [];
+  const tooTall: string[] = [];
+  const slots = [...new Set(bodies.map((b) => slotOf(b.id)))].sort((a, b) => a - b);
+  for (const slot of slots) {
+    const group = bodies.filter((b) => slotOf(b.id) === slot);
+    // Largest first, each onto the first of this filament's plates it fits on.
+    const area = (b: PartMesh) => (b.printMax[0] - b.printMin[0]) * (b.printMax[1] - b.printMin[1]);
+    const bins: PartMesh[][] = [];
+    if (fits(group)) bins.push(group);
+    else
+      for (const b of [...group].sort((x, y) => area(y) - area(x))) {
+        const bin = bins.find((g) => fits([...g, b]));
+        if (bin) bin.push(b);
+        else bins.push([b]);
+      }
+    for (const bin of bins) {
+      const ordered = group.filter((b) => bin.includes(b));
+      const L = layoutParts(withInlays(ordered), bed);
+      overflow.push(...L.overflow);
+      tooTall.push(...L.tooTall);
+      plates.push({ slot, bodies: ordered.map((b) => b.id), matrices: L.matrices });
+    }
+  }
+  const matrices = new Map<string, Mat4>();
+  plates.forEach((plate, k) => {
+    const shift = translation(k * (bed.w + PLATE_GAP), 0, 0);
+    for (const [id, m] of plate.matrices) matrices.set(id, mulMat(shift, m));
+  });
+  return { plates, matrices, overflow, tooTall };
+}
+
 /** Matrix that sits one part alone on the bed origin (used for single-part STL files). */
 export function soloMatrix(p: PartMesh): Mat4 {
   const cx = (p.printMin[0] + p.printMax[0]) / 2;

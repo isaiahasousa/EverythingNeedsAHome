@@ -194,7 +194,7 @@ export function lidWarnings(p: BoxParams, R: Resolved): Warning[] {
     }
     // The wall is split into the box's neck, the clearance and the lid's skirt; each needs a printed line.
     if (skirt < 0.4 - EPS || neck < 0.4 - EPS) {
-      w.push({ level: 'error', text: `The walls are too thin for a flush lid with ${fmt(p.tolerance)} mm of clearance. Use walls of at least ${fmt(ceilTo(0.8 + p.tolerance, 0.1))} mm, less clearance, or another lid style.` });
+      w.push({ level: 'error', text: `The walls are too thin for a flush lid with ${fmt(p.tolerance)} mm of tolerance. Use walls of at least ${fmt(ceilTo(0.8 + p.tolerance, 0.1))} mm, less tolerance, or another lid style.` });
       return w;
     }
     if (skirt < 0.8 - EPS || neck < 0.8 - EPS)

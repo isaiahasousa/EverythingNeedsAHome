@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { filamentColour } from '../core/filaments';
 import { IDENTITY, mulMat, translation } from '../core/math';
+import { PLATE_GAP } from '../export/layout';
 import type { FaceDef, Mat4, PartMesh, Vec3 } from '../core/types';
 import type { ViewMode } from '../state/store';
 
@@ -51,8 +53,10 @@ export class Viewer {
   private controls: OrbitControls;
   private root = new THREE.Group();
   private parts = new Map<string, PartView>();
-  private bodyMat: THREE.MeshStandardMaterial;
   private colorMats = new Map<string, THREE.MeshStandardMaterial>();
+  /** AMS filament colours in slot order, and the slot each part prints with. */
+  private filaments: string[] = ['#2f8a87'];
+  private partSlots: Record<string, number> = {};
   private edgeMat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.3 });
   private plate = new THREE.Group();
   private shadow: THREE.Mesh;
@@ -70,7 +74,7 @@ export class Viewer {
   private highlightFace: string | null = null;
   private hoverFace: string | null = null;
   private showEdges = true;
-  private bed = { w: 256, d: 256 };
+  private bed = { w: 256, d: 256, plates: 1 };
   private reduceMotion = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   private hasFitted = false;
   private fitOnResize = false;
@@ -105,7 +109,6 @@ export class Viewer {
     rim.position.set(200, 160, 120);
     this.scene.add(key, rim, new THREE.HemisphereLight(0xffffff, 0x6a7680, 0.55));
 
-    this.bodyMat = new THREE.MeshStandardMaterial({ color: '#2f8a87', roughness: 0.58, metalness: 0, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
 
     // Soft contact shadow under the model in the assembled / exploded views.
     const c = document.createElement('canvas');
@@ -155,9 +158,18 @@ export class Viewer {
     this.dirty = true;
   }
 
-  setBodyColor(hex: string) {
-    this.bodyMat.color.set(hex);
+  /** Colour every part by its filament slot. */
+  setColors(filaments: string[], partSlots: Record<string, number>) {
+    this.filaments = filaments;
+    this.partSlots = partSlots;
+    for (const pv of this.parts.values()) pv.mesh.material = this.materialsFor(pv.info);
     this.dirty = true;
+  }
+
+  /** A part's materials: its own filament (an inlay's own slot) and the slots of the inlays in its pockets. */
+  private materialsFor(info: PartMesh) {
+    const own = info.role === 'inlay' ? (info.slot ?? 0) : (this.partSlots[info.id] ?? 0);
+    return info.materials.map((s) => this.colorMat(filamentColour(this.filaments, s ?? own)));
   }
 
   setEdges(on: boolean) {
@@ -175,8 +187,10 @@ export class Viewer {
     return m;
   }
 
-  setBed(w: number, d: number) {
-    this.bed = { w, d };
+  /** The printer's bed, drawn `plates` times side by side (a plate per filament colour). */
+  setBed(w: number, d: number, plates = 1) {
+    if (w === this.bed.w && d === this.bed.d && plates === this.bed.plates) return;
+    this.bed = { w, d, plates };
     this.buildPlate();
   }
 
@@ -185,20 +199,19 @@ export class Viewer {
       this.plate.remove(ch);
       (ch as THREE.Mesh).geometry?.dispose();
     }
-    const { w, d } = this.bed;
-    const slab = new THREE.Mesh(
-      new THREE.BoxGeometry(w, d, 2),
-      new THREE.MeshStandardMaterial({ color: this.theme.plate, roughness: 0.9, metalness: 0.15 }),
-    );
-    slab.position.z = -1.02;
-    const pts: number[] = [];
-    for (let x = -w / 2; x <= w / 2 + 1e-6; x += 10) pts.push(x, -d / 2, 0.02, x, d / 2, 0.02);
-    for (let y = -d / 2; y <= d / 2 + 1e-6; y += 10) pts.push(-w / 2, y, 0.02, w / 2, y, 0.02);
-    const grid = new THREE.LineSegments(
-      new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)),
-      new THREE.LineBasicMaterial({ color: this.theme.plateLine, transparent: true, opacity: 0.45 }),
-    );
-    this.plate.add(slab, grid);
+    const { w, d, plates } = this.bed;
+    const slabMat = new THREE.MeshStandardMaterial({ color: this.theme.plate, roughness: 0.9, metalness: 0.15 });
+    const lineMat = new THREE.LineBasicMaterial({ color: this.theme.plateLine, transparent: true, opacity: 0.45 });
+    for (let k = 0; k < plates; k++) {
+      const ox = k * (w + PLATE_GAP);
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(w, d, 2), slabMat);
+      slab.position.set(ox, 0, -1.02);
+      const pts: number[] = [];
+      for (let x = -w / 2; x <= w / 2 + 1e-6; x += 10) pts.push(ox + x, -d / 2, 0.02, ox + x, d / 2, 0.02);
+      for (let y = -d / 2; y <= d / 2 + 1e-6; y += 10) pts.push(ox - w / 2, y, 0.02, ox + w / 2, y, 0.02);
+      const grid = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)), lineMat);
+      this.plate.add(slab, grid);
+    }
     this.plate.visible = this.view === 'print';
     this.dirty = true;
   }
@@ -222,8 +235,7 @@ export class Viewer {
       geo.setAttribute('normal', new THREE.BufferAttribute(info.renderNormals, 3));
       for (const g of info.groups) geo.addGroup(g.start, g.count, g.materialIndex);
       geo.computeBoundingSphere();
-      const mats = info.materials.map((c) => (c === null ? this.bodyMat : this.colorMat(c)));
-      const mesh = new THREE.Mesh(geo, mats);
+      const mesh = new THREE.Mesh(geo, this.materialsFor(info));
       mesh.userData.partId = info.id;
       const edges = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(info.edges, 3)), this.edgeMat);
       edges.visible = this.showEdges;
@@ -308,7 +320,7 @@ export class Viewer {
     }
     if (this.view === 'print') {
       box.expandByPoint(new THREE.Vector3(-this.bed.w / 2, -this.bed.d / 2, 0));
-      box.expandByPoint(new THREE.Vector3(this.bed.w / 2, this.bed.d / 2, 0));
+      box.expandByPoint(new THREE.Vector3((this.bed.plates - 1) * (this.bed.w + PLATE_GAP) + this.bed.w / 2, this.bed.d / 2, 0));
     }
     return box;
   }

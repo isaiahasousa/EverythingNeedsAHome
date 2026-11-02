@@ -35,3 +35,8 @@ Run these before calling any change done:
    in the docs that the code does not back up. It reports each finding with evidence and a severity, and
    ends with PASS or FAIL. Fix every confirmed finding (or record why it is not a problem), then start a
    fresh review. Repeat until a review passes. Report the final verdict and what was fixed along the way.
+7. **User acceptance = the owner tests it.** After a review passes, push to `main` (the Cloudflare site
+   redeploys) and ask the owner to try the change on the live site, and on their printer and slicer
+   (Bambu Studio with an AMS) where it matters, recording notes on the feedback page. A change is done
+   only when they accept it. Their feedback sets the priorities for the next round, ahead of the
+   reviewer's smaller findings.

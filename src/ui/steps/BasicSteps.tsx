@@ -1,9 +1,9 @@
 import { BOX_ORDER, BOX_TYPES } from '../../boxes';
 import type { BoxTypeId, Warning } from '../../core/types';
-import { FILAMENTS } from '../../state/project';
-import { useFaces } from '../../state/buildController';
-import { setUI, update, useProject } from '../../state/store';
-import { Segmented, Swatches } from '../controls';
+import { useBodies, useFaces } from '../../state/buildController';
+import { setPartSlot, setUI, update, useProject } from '../../state/store';
+import { Segmented } from '../controls';
+import { FilamentPalette, SlotPicker } from '../Filaments';
 import { IsoIcon } from '../icons';
 import { ParamField } from '../ParamField';
 
@@ -111,7 +111,9 @@ export function SizeStep() {
 
 export function DetailsStep() {
   const type = useProject((p) => p.type);
-  const color = useProject((p) => p.color);
+  const partSlots = useProject((p) => p.partSlots);
+  const count = useProject((p) => p.filaments.length);
+  const bodies = useBodies();
   const { warnings } = useFaces();
   const t = BOX_TYPES[type];
   return (
@@ -128,8 +130,19 @@ export function DetailsStep() {
         </section>
       ))}
       <section className="section">
-        <h3 className="section-title">Filament colour</h3>
-        <Swatches label="Filament colour" value={color} colors={FILAMENTS} onChange={(hex) => update((p) => ({ ...p, color: hex }), 'color')} />
+        <h3 className="section-title">Colours (AMS)</h3>
+        <p className="field-help" style={{ marginTop: 0 }}>
+          Set each slot to the filament loaded in that AMS slot, then choose the one each part prints with. Parts in different colours print on separate plates.
+        </p>
+        <FilamentPalette />
+        <div className="part-slots" style={{ marginTop: 14 }}>
+          {bodies.map((b) => (
+            <div key={b.id}>
+              <span>{b.name}</span>
+              <SlotPicker label={`${b.name} filament`} value={Math.min(partSlots[b.id] ?? 0, count - 1)} onChange={(s) => setPartSlot(b.id, s)} />
+            </div>
+          ))}
+        </div>
       </section>
       <Notes items={warnings} />
     </>

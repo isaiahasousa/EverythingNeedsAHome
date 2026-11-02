@@ -82,7 +82,7 @@ export const drawers: BoxType = {
             { value: 'none', label: 'None' },
           ],
         },
-        { kind: 'length', key: 'drawerClearance', label: 'Drawer clearance', min: 0.1, max: 1.5, step: 0.05, help: 'Gap around each drawer. 0.3-0.4 mm slides smoothly.' },
+        { kind: 'length', key: 'drawerClearance', label: 'Drawer tolerance', min: 0.05, max: 1.5, step: 0.05, help: 'Gap around each drawer as it slides. 0.1 mm suits a well-tuned printer; raise it if the drawers stick.' },
         { kind: 'toggle', key: 'closedBack', label: 'Closed back' },
       ],
     },
@@ -132,7 +132,7 @@ export const drawers: BoxType = {
   warnings(p, R) {
     const w = [];
     if ((R.ch as number) < 8) w.push({ level: 'error' as const, text: 'Drawers would be shorter than 8 mm. Use fewer drawers or a taller cabinet.' });
-    if (p.drawerClearance < 0.2) w.push({ level: 'warn' as const, text: 'Less than 0.2 mm of clearance may make the drawers stick.' });
+    if (p.drawerClearance < 0.1 - 1e-9) w.push({ level: 'warn' as const, text: 'Less than 0.1 mm of tolerance may make the drawers stick.' });
     if (p.wall < 1.2) w.push({ level: 'warn' as const, text: 'Cabinet walls under 1.2 mm are fragile.' });
     if (R.inner.some((v) => v <= 0)) w.push({ level: 'error' as const, text: 'The drawers have no room inside. Reduce wall thickness or enlarge the cabinet.' });
     if ((R.rWanted as number) > (R.r as number) + 0.01)

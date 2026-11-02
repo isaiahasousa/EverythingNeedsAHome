@@ -1,4 +1,5 @@
 import { BOX_ORDER, DEFAULT_PARAMS, normalizeParams } from '../boxes';
+import { DEFAULT_FILAMENTS, MAX_FILAMENTS } from '../core/filaments';
 import { uid } from '../core/math';
 import type { BoxParams, BoxTypeId, Graphic, GraphicMode, GraphicSource } from '../core/types';
 import type { SavedFont } from '../graphics/text';
@@ -13,25 +14,15 @@ export interface Project {
   params: BoxParams;
   graphics: Graphic[];
   units: Units;
-  /** Filament colour used for the preview and as the body colour in 3MF files. */
-  color: string;
+  /** The filaments loaded in the AMS, in slot order (slot 1 first), as `#rrggbb` colours. */
+  filaments: string[];
+  /** The filament slot each part prints with, by part id; parts not listed use slot 1. */
+  partSlots: Record<string, number>;
   printer: string;
   /** Fonts the user uploaded, kept with the project so its text looks the same after a reload. */
   fonts: SavedFont[];
 }
 
-export const FILAMENTS: { name: string; hex: string }[] = [
-  { name: 'Teal', hex: '#2f8a87' },
-  { name: 'Cobalt', hex: '#2f5fb3' },
-  { name: 'Signal orange', hex: '#e8641c' },
-  { name: 'Cherry', hex: '#b3263a' },
-  { name: 'Sunflower', hex: '#f0bf2c' },
-  { name: 'Sage', hex: '#87a07a' },
-  { name: 'Lilac', hex: '#9686c4' },
-  { name: 'Ivory', hex: '#ece6d6' },
-  { name: 'Silver', hex: '#a7aeb4' },
-  { name: 'Charcoal', hex: '#34383c' },
-];
 
 export function newGraphic(faceId: string, source: GraphicSource, over: Partial<Graphic> = {}): Graphic {
   return {
@@ -47,7 +38,7 @@ export function newGraphic(faceId: string, source: GraphicSource, over: Partial<
     mirror: false,
     mode: 'deboss',
     depth: 0.8,
-    color: '#ece6d6',
+    slot: 1,
     lithoMin: 0.8,
     lithoMax: 3,
     hidden: false,
@@ -62,7 +53,8 @@ export function sampleProject(): Project {
     type: 'lidded',
     params: { ...DEFAULT_PARAMS, snap: true },
     units: 'mm',
-    color: '#2f8a87',
+    filaments: [...DEFAULT_FILAMENTS],
+    partSlots: {},
     printer: 'bed256',
     fonts: [],
     graphics: [
@@ -78,7 +70,7 @@ export function sampleProject(): Project {
         h: 36,
         mode: 'inlay',
         depth: 0.6,
-        color: '#f0bf2c',
+        slot: 2,
       }),
       newGraphic('left', { kind: 'pattern', pattern: 'hex', cell: 4.5, web: 1.6 }, {
         w: 34,
@@ -86,7 +78,6 @@ export function sampleProject(): Project {
         y: 2,
         lockAspect: false,
         mode: 'cut',
-        color: '#ece6d6',
       }),
     ],
   };
@@ -107,7 +98,7 @@ function num(v: unknown, fallback: number, min: number, max: number): number {
 }
 
 /** Fill in a graphic from a file and keep its numbers within what the editor allows. */
-function normalizeGraphic(raw: Graphic): Graphic {
+function normalizeGraphic(raw: Graphic, slots: number): Graphic {
   const g = { ...newGraphic(String(raw.faceId), raw.source), ...raw };
   const s = { ...g.source } as GraphicSource & Record<string, unknown>;
   if (s.kind === 'shape') {
@@ -141,24 +132,51 @@ function normalizeGraphic(raw: Graphic): Graphic {
     lockAspect: g.lockAspect !== false,
     mirror: g.mirror === true,
     hidden: g.hidden === true,
-    color: hex(g.color, '#ece6d6'),
+    slot: Math.round(num(g.slot, Math.min(1, slots - 1), 0, slots - 1)),
   };
+}
+
+/**
+ * The palette and slots of a project file. Files from before filament slots had one body colour and a
+ * colour per graphic: those become the first slots, in that order.
+ */
+function normalizeFilaments(p: Partial<Project> & { color?: unknown }, graphics: (Graphic & { color?: unknown })[]) {
+  if (Array.isArray(p.filaments) && p.filaments.length) {
+    const filaments = p.filaments.slice(0, MAX_FILAMENTS).map((c, i) => hex(c, DEFAULT_FILAMENTS[i % DEFAULT_FILAMENTS.length]));
+    return { filaments, graphics };
+  }
+  const filaments: string[] = [hex(p.color, DEFAULT_FILAMENTS[0])];
+  const slotOf = (c: unknown) => {
+    const h = hex(c, '').toLowerCase();
+    if (!h) return 1;
+    let i = filaments.findIndex((f) => f.toLowerCase() === h);
+    if (i < 0 && filaments.length < MAX_FILAMENTS) i = filaments.push(h) - 1;
+    return Math.max(0, i);
+  };
+  // Only colour inlays print in their own colour; other graphics take their part's.
+  const withSlots = graphics.map((g) => (g.mode === 'inlay' && g.slot === undefined ? { ...g, slot: slotOf(g.color) } : g));
+  for (const c of DEFAULT_FILAMENTS) if (filaments.length < 4 && !filaments.some((f) => f.toLowerCase() === c)) filaments.push(c);
+  return { filaments, graphics: withSlots };
 }
 
 /** Validate and fill a project parsed from JSON (file import or local storage). */
 export function normalizeProject(raw: unknown): Project {
   const p = (raw ?? {}) as Partial<Project>;
   if (typeof p !== 'object' || !p.type) throw new Error('This file is not an EverythingNeedsAHome project.');
+  const found = Array.isArray(p.graphics) ? p.graphics.filter((g) => g && typeof g === 'object' && g.source && typeof g.source === 'object' && SOURCE_KINDS.includes(g.source.kind)) : [];
+  const { filaments, graphics } = normalizeFilaments(p, found);
+  const partSlots: Record<string, number> = {};
+  if (p.partSlots && typeof p.partSlots === 'object')
+    for (const [id, v] of Object.entries(p.partSlots)) if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < filaments.length) partSlots[id] = v;
   return {
     version: 1,
     name: typeof p.name === 'string' ? p.name : 'Imported box',
     type: (BOX_ORDER as string[]).includes(p.type) ? p.type : 'tray',
     params: normalizeParams(p.params),
-    graphics: Array.isArray(p.graphics)
-      ? p.graphics.filter((g) => g && typeof g === 'object' && g.source && typeof g.source === 'object' && SOURCE_KINDS.includes(g.source.kind)).map(normalizeGraphic)
-      : [],
+    graphics: graphics.map((g) => normalizeGraphic(g, filaments.length)),
     units: p.units === 'in' ? 'in' : 'mm',
-    color: hex(p.color, '#2f8a87'),
+    filaments,
+    partSlots,
     printer: typeof p.printer === 'string' ? p.printer : 'bed256',
     fonts: Array.isArray(p.fonts)
       ? p.fonts.filter((f): f is SavedFont => !!f && typeof f.id === 'string' && f.id.startsWith('custom:') && typeof f.name === 'string' && typeof f.data === 'string')

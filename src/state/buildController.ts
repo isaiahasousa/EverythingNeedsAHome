@@ -132,6 +132,16 @@ export function useFaces(): FaceInfo {
   }, [type, params]);
 }
 
+/** The printable parts of the current box (not their colour inlays), by id and name. */
+export function useBodies(): { id: string; name: string }[] {
+  const type = useProject((p) => p.type);
+  const params = useProject((p) => p.params);
+  return useMemo(() => {
+    const t = BOX_TYPES[type];
+    return t.parts(params, t.resolve(params)).map((i) => ({ id: i.id, name: i.name }));
+  }, [type, params]);
+}
+
 export function graphicsOnFace(graphics: Graphic[], faceId: string) {
   return graphics.filter((g) => g.faceId === faceId);
 }

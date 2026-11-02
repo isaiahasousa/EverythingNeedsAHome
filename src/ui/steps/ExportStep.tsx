@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { layoutParts, printerById, PRINTERS, soloMatrix } from '../../export/layout';
+import { slotName } from '../../core/filaments';
+import { layoutPlates, printerById, PRINTERS, soloMatrix, type Plate, type PlateLayout } from '../../export/layout';
 import { slug, to3MF, toSTL, zipFiles } from '../../export/meshio';
 import { saveFile, savesAreZipped } from '../../export/save';
 import type { PartMesh } from '../../core/types';
@@ -17,16 +18,35 @@ async function deliver(name: string, data: Uint8Array | string, mime: string) {
   else if (r.outcome === 'unavailable') toast('Saving files is not available in this view. Open the app in its own tab to download.', 'error');
 }
 
+/** The filament slot a body prints with (a slot that was removed falls back to slot 1). */
+const bodySlot = (partSlots: Record<string, number>, count: number, id: string) => Math.min(partSlots[id] ?? 0, count - 1);
+
+/** The parts on plates: one or more plates per filament colour. */
 export function useLayout() {
   const result = useBuild((b) => b.result);
   const printer = useProject((p) => p.printer);
-  return useMemo(() => (result ? layoutParts(result.parts, printerById(printer)) : null), [result, printer]);
+  const partSlots = useProject((p) => p.partSlots);
+  const count = useProject((p) => p.filaments.length);
+  return useMemo(() => (result ? layoutPlates(result.parts, printerById(printer), (id) => bodySlot(partSlots, count, id)) : null), [result, printer, partSlots, count]);
 }
 
-export function exportAll3MF(parts: PartMesh[], matrices: Map<string, number[]>) {
+/** A plate's parts placed on its bed, each with the filament slot it prints with. */
+function plateItems(parts: PartMesh[], plate: Plate) {
   const p = projectStore.get();
-  const items = parts.map((part) => ({ part, matrix: matrices.get(part.id) ?? part.print }));
-  return deliver(`${slug(p.name)}.3mf`, to3MF(items, p.color, p.name), 'model/3mf');
+  return parts
+    .filter((part) => plate.bodies.includes(part.role === 'inlay' ? (part.parentId ?? '') : part.id))
+    .map((part) => ({ part, matrix: plate.matrices.get(part.id) ?? part.print, slot: part.role === 'inlay' ? (part.slot ?? 0) : bodySlot(p.partSlots, p.filaments.length, part.id) }));
+}
+
+/** Download one plate's 3MF, or every plate: a single 3MF, or a zip with a 3MF per plate. */
+export function exportPlates(parts: PartMesh[], layout: PlateLayout, only?: number) {
+  const p = projectStore.get();
+  const many = layout.plates.length > 1;
+  const file = (k: number) => to3MF(plateItems(parts, layout.plates[k]), p.filaments, many ? `${p.name} (plate ${k + 1})` : p.name);
+  if (only !== undefined) return deliver(`${slug(p.name)}-plate-${only + 1}.3mf`, file(only), 'model/3mf');
+  if (!many) return deliver(`${slug(p.name)}.3mf`, file(0), 'model/3mf');
+  const files = Object.fromEntries(layout.plates.map((_, k) => [`${slug(p.name)}-plate-${k + 1}.3mf`, file(k)]));
+  return deliver(`${slug(p.name)}-plates.zip`, zipFiles(files), 'application/zip');
 }
 
 export function ExportStep() {
@@ -35,6 +55,7 @@ export function ExportStep() {
   const name = useProject((p) => p.name);
   const printer = useProject((p) => p.printer);
   const units = useProject((p) => p.units);
+  const filaments = useProject((p) => p.filaments);
   const layout = useLayout();
   const openRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -52,6 +73,7 @@ export function ExportStep() {
   const totalVol = parts.reduce((s, p) => s + p.volume, 0) / 1000;
   // Only a finished build of the current settings can be downloaded.
   const ready = status === 'ready' && bodies.length > 0;
+  const plateCount = layout?.plates.length ?? 0;
 
   const run = async (fn: () => Promise<void> | void) => {
     setBusy(true);
@@ -93,9 +115,9 @@ export function ExportStep() {
       <section className="section">
         <h3 className="section-title">Downloads</h3>
         <div className="big-actions">
-          <button type="button" className="btn primary" disabled={!ready || busy} onClick={() => layout && run(() => exportAll3MF(parts, layout.matrices))}>
-            <Icon name="download" /> All parts, ready to slice
-            <span className="sub">{inArtifactHost ? '.3mf in .zip' : '.3mf'}</span>
+          <button type="button" className="btn primary" disabled={!ready || busy} onClick={() => layout && run(() => exportPlates(parts, layout))}>
+            <Icon name="download" /> {plateCount > 1 ? `All ${plateCount} plates, ready to slice` : 'All parts, ready to slice'}
+            <span className="sub">{plateCount > 1 ? `${plateCount} × .3mf, .zip` : inArtifactHost ? '.3mf in .zip' : '.3mf'}</span>
           </button>
           <button
             type="button"
@@ -117,8 +139,45 @@ export function ExportStep() {
             <span className="sub">.zip</span>
           </button>
         </div>
-        {inlays.length > 0 && <div className="field-help" style={{ marginTop: 0 }}>Inlays are separate STL files placed to line up with their part. In the 3MF they arrive as one object with a part per colour.</div>}
+        {inlays.length > 0 && (
+          <div className="field-help" style={{ marginTop: 0 }}>
+            Colour inlays are separate STL files placed to line up with their part. In the 3MF each part arrives as one object, with a part per colour inlay set to its AMS slot.
+          </div>
+        )}
       </section>
+
+      {layout && plateCount > 0 && (
+        <section className="section">
+          <h3 className="section-title">Plates</h3>
+          <ul className="parts">
+            {layout.plates.map((plate, k) => {
+              const names = plate.bodies.map((id) => bodies.find((b) => b.id === id)?.name ?? id);
+              const extra = [...new Set(inlays.filter((x) => plate.bodies.includes(x.parentId ?? '')).map((x) => x.slot ?? 0))].filter((s) => s !== plate.slot);
+              return (
+                <li key={k} className="part-row">
+                  <strong>
+                    <span className="slot-dot" style={{ background: filaments[plate.slot] }} /> Plate {k + 1}
+                  </strong>
+                  {plateCount > 1 && (
+                    <button type="button" className="btn small" disabled={!ready || busy} onClick={() => run(() => exportPlates(parts, layout, k))}>
+                      <Icon name="download" /> 3MF
+                    </button>
+                  )}
+                  <span className="meta">
+                    {names.join(', ')} in {slotName(filaments, plate.slot)}
+                    {extra.length > 0 && <>, with inlays in {extra.map((s) => slotName(filaments, s)).join(', ')}</>}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          {plateCount > 1 && (
+            <div className="field-help" style={{ marginTop: 0 }}>
+              Parts in different colours print on separate plates, so the AMS only changes filament for colour inlays. Choose part colours in the Details step.
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="section">
         <h3 className="section-title">Parts</h3>

@@ -5,7 +5,9 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { BOX_ORDER, BOX_TYPES, DEFAULT_PARAMS, normalizeParams } from '../src/boxes';
 import { lengthProps } from '../src/ui/ParamField';
 import { applyMat, frameMatrix, IDENTITY, pointInPolygon, signedArea } from '../src/core/math';
-import { layoutParts, PRINTERS } from '../src/export/layout';
+import { strFromU8, unzipSync } from 'fflate';
+import { layoutParts, layoutPlates, PLATE_GAP, PRINTERS } from '../src/export/layout';
+import { to3MF } from '../src/export/meshio';
 import { runBuild } from '../src/geometry/build';
 import { normalizeProject } from '../src/state/project';
 import { applyGraphics } from '../src/geometry/graphics3d';
@@ -177,9 +179,9 @@ describe('cabinet and sliding lid corners', () => {
     });
   }
 
-  for (const [radius, wall, thumbGrip] of [[0, 1.2, true], [4, 2, true], [10, 2, false], [10, 3, true], [2, 1.2, false]] as const) {
-    it(`sliding lid radius ${radius}, wall ${wall} keeps the corners closed`, () => {
-      const s = setup('sliding', { radius, wall, thumbGrip });
+  for (const [radius, wall, thumbGrip, lidInset] of [[0, 1.2, true, 4], [4, 2, true, 4], [10, 2, false, 5], [10, 3, true, 5], [2, 1.2, false, 4], [4, 6, true, 4]] as const) {
+    it(`sliding lid radius ${radius}, wall ${wall}, inset ${lidInset} keeps the corners closed`, () => {
+      const s = setup('sliding', { radius, wall, thumbGrip, lidInset });
       expect(s.errors).toEqual([]);
       const { base, lid } = s.build();
       for (const m of [base, lid]) {
@@ -216,7 +218,7 @@ describe('graphics clean-up', () => {
   const graphic = (over: Partial<Graphic>): Graphic => ({
     id: 'g1', faceId: 'front', source: { kind: 'shape', shape: 'ring', sides: 6, ratio: 0.5, corner: 0 },
     x: 0, y: 0, w: 24, h: 24, lockAspect: true, rotation: 0, mirror: false, mode: 'cut', depth: 1,
-    color: '#d0402b', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+    slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
   });
 
   it('warns when a cut-through graphic leaves a loose piece, and not otherwise', () => {
@@ -283,7 +285,7 @@ describe('review round 2', () => {
   });
 
   it('refuses a sliding lid that would not be held, or a box too narrow for one', () => {
-    for (const over of [{ grooveDepth: 0.5, tolerance: 0.5 }, { grooveDepth: 0.3, tolerance: 0.3 }, { tolerance: 1 }, { wall: 1.2, tolerance: 0.8 }, { width: 10, wall: 4.5 }] as Partial<BoxParams>[])
+    for (const over of [{ grooveDepth: 0.5, tolerance: 0.5 }, { grooveDepth: 0.3, tolerance: 0.3 }, { tolerance: 1 }, { tolerance: 0.85 }, { width: 10, wall: 4.5 }, { width: 12 }, { radius: 10 }] as Partial<BoxParams>[])
       expect(setup('sliding', over).errors.length, JSON.stringify(over)).toBeGreaterThan(0);
   });
 
@@ -322,7 +324,7 @@ describe('review round 2', () => {
     const solids = s.build();
     const faces = s.faces();
     const g = (faceId: string, depth: number) =>
-      placeGraphic({ id: 'g', faceId, source: { kind: 'shape', shape: 'star', sides: 5, ratio: 0.45, corner: 0 }, x: 0, y: 0, w: 6, h: 6, lockAspect: true, rotation: 0, mirror: false, mode: 'emboss', depth, color: '#fff', lithoMin: 0.8, lithoMax: 3, hidden: false }, builtinShape('star', 5, 0.45, 0));
+      placeGraphic({ id: 'g', faceId, source: { kind: 'shape', shape: 'star', sides: 5, ratio: 0.45, corner: 0 }, x: 0, y: 0, w: 6, h: 6, lockAspect: true, rotation: 0, mirror: false, mode: 'emboss', depth, slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false }, builtinShape('star', 5, 0.45, 0));
     expect(applyGraphics(solids, faces, [g('front', 1)]).warnings.some((w) => /fit its grid/.test(w.text))).toBe(true);
     expect(applyGraphics(solids, faces, [g('label', 2)]).warnings.some((w) => /stacked on top/.test(w.text))).toBe(true);
     expect(applyGraphics(solids, faces, [g('label', 0.8)]).warnings.some((w) => /proud/.test(w.text))).toBe(false);
@@ -428,7 +430,7 @@ describe('review round 3', () => {
     for (const f of s.faces()) if (f.id === 'lid-top') expect(Math.abs(signedArea(f.outline))).toBeGreaterThanOrEqual(20);
     const solids = s.build();
     const face = { ...s.faces().find((f) => f.id === 'bottom')!, outline: [] as Vec2[] };
-    const out = applyGraphics(solids, [face], [placeGraphic({ id: 'g', faceId: 'bottom', source: { kind: 'shape', shape: 'star', sides: 5, ratio: 0.45, corner: 0 }, x: 0, y: 0, w: 60, h: 60, lockAspect: true, rotation: 0, mirror: false, mode: 'emboss', depth: 1, color: '#ffffff', lithoMin: 0.8, lithoMax: 3, hidden: false }, builtinShape('star', 5, 0.45, 0))]);
+    const out = applyGraphics(solids, [face], [placeGraphic({ id: 'g', faceId: 'bottom', source: { kind: 'shape', shape: 'star', sides: 5, ratio: 0.45, corner: 0 }, x: 0, y: 0, w: 60, h: 60, lockAspect: true, rotation: 0, mirror: false, mode: 'emboss', depth: 1, slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false }, builtinShape('star', 5, 0.45, 0))]);
     expect(out.solids.base.volume()).toBeCloseTo(solids.base.volume(), 3);
     expect(out.warnings.some((w) => /no room/.test(w.text))).toBe(true);
   });
@@ -491,8 +493,9 @@ describe('review round 3', () => {
       color: 'red',
       graphics: [{ id: 'g', faceId: 'front', source: { kind: 'text', text: 'A', font: 'archivo-black', align: 'center', lineSpacing: 1, letterSpacing: 0 }, mode: 'lithophane', color: 'blue' }],
     });
-    expect(p.color).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(p.graphics[0].color).toMatch(/^#[0-9a-f]{6}$/i);
+    for (const c of p.filaments) expect(c).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(p.graphics[0].slot).toBeGreaterThanOrEqual(0);
+    expect(p.graphics[0].slot).toBeLessThan(p.filaments.length);
     expect(p.graphics[0].mode).toBe('deboss');
   });
 });
@@ -501,7 +504,7 @@ describe('review round 4', () => {
   const star = () => builtinShape('star', 5, 0.45, 0);
   const gfx = (over: Partial<Graphic>): Graphic => ({
     id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'star', sides: 5, ratio: 0.45, corner: 0 }, x: 0, y: 0, w: 20, h: 20,
-    lockAspect: false, rotation: 0, mirror: false, mode: 'deboss', depth: 0.8, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'deboss', depth: 0.8, slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
   });
   /** A lithophane graphic with a dark-to-light ramp, as the build controller would place it. */
   const litho = (faceId: string, w: number, h: number, y = 0, max = 3) => {
@@ -577,20 +580,20 @@ describe('review round 4', () => {
     const s = setup('lidded');
     const faces = s.faces();
     const solids = s.build();
-    const inlay = (color: string, x = 0) => placeGraphic(gfx({ mode: 'inlay', depth: 0.6, color, x, w: 30, h: 20, source: { kind: 'shape', shape: 'rect', sides: 4, ratio: 0.5, corner: 0 } }), builtinShape('rect', 4, 0.5, 0));
+    const inlay = (slot: number, x = 0, id = 'g') => placeGraphic(gfx({ id, mode: 'inlay', depth: 0.6, slot, x, w: 30, h: 20, source: { kind: 'shape', shape: 'rect', sides: 4, ratio: 0.5, corner: 0 } }), builtinShape('rect', 4, 0.5, 0));
     const hole = placeGraphic(gfx({ mode: 'cut', w: 10, h: 10, source: { kind: 'shape', shape: 'circle', sides: 4, ratio: 0.5, corner: 0 } }), builtinShape('circle'));
     const raised = placeGraphic(gfx({ mode: 'emboss', depth: 1, x: 8 }), star());
-    const whole = Object.values(applyGraphics(solids, faces, [inlay('#ff0000')]).inlays)[0].solid.volume();
-    for (const order of [[inlay('#ff0000'), hole], [hole, inlay('#ff0000')]]) {
+    const whole = Object.values(applyGraphics(solids, faces, [inlay(1)]).inlays)[0].solid.volume();
+    for (const order of [[inlay(1), hole], [hole, inlay(1)]]) {
       const out = applyGraphics(solids, faces, order);
       const fill = Object.values(out.inlays)[0].solid;
       expect(overlap(fill, out.solids.base)).toBeLessThan(0.01);
       // The fill lost exactly the through-hole: a 10 mm circle, 0.6 mm deep.
       expect(whole - fill.volume()).toBeCloseTo(Math.PI * 25 * 0.6, 0);
     }
-    const over = applyGraphics(solids, faces, [inlay('#ff0000'), raised]);
+    const over = applyGraphics(solids, faces, [inlay(1), raised]);
     expect(overlap(Object.values(over.inlays)[0].solid, over.solids.base)).toBeLessThan(0.01);
-    const two = applyGraphics(solids, faces, [inlay('#ff0000'), inlay('#00ff00', 10)]);
+    const two = applyGraphics(solids, faces, [inlay(1), inlay(2, 10, 'g2')]);
     const [a, b] = Object.values(two.inlays).map((x) => x.solid);
     expect(overlap(a, b)).toBeLessThan(0.01);
     for (const inl of Object.values(two.inlays)) for (const piece of inl.solid.decompose()) expect(piece.volume()).toBeGreaterThanOrEqual(0.02);
@@ -611,7 +614,7 @@ describe('review round 4', () => {
 describe('review round 5', () => {
   const gfx = (over: Partial<Graphic>): Graphic => ({
     id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'rect', sides: 4, ratio: 0.5, corner: 0 }, x: 0, y: 0, w: 20, h: 10,
-    lockAspect: false, rotation: 0, mirror: false, mode: 'deboss', depth: 0.8, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'deboss', depth: 0.8, slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
   });
   const rect = () => builtinShape('rect', 4, 0.5, 0);
   const litho = (faceId: string, frame: { x: number; y: number; w: number; h: number; rotation?: number }, max = 3) => {
@@ -674,8 +677,8 @@ describe('review round 5', () => {
     followAdvice('lidded', { lidStyle: 'rabbet', wall: 1, tolerance: 0.4 }, 'wall');
     followAdvice('hinged', { knuckleDiameter: 10, lidHeight: 4.5, lidTop: 2 }, 'lidHeight');
     expect(setup('lidded', { lidStyle: 'rabbet', lipHeight: 0.5 }).errors[0].text).toMatch(/Lip depth/);
-    // 12 mm across with 4 mm walls: even the thinnest (0.8 mm) lip leaves no room in the middle.
-    const tiny = setup('lidded', { width: 12, depth: 12, lidStyle: 'plug', wall: 4, lipThickness: 0.8 });
+    // 11.5 mm across with 4 mm walls: even the thinnest (0.8 mm) lip leaves no room in the middle.
+    const tiny = setup('lidded', { width: 11.5, depth: 11.5, lidStyle: 'plug', wall: 4, lipThickness: 0.8 });
     expect(tiny.errors[0].text).toMatch(/too small for a [\d.]+ mm lid lip/);
     expect(tiny.errors[0].text).not.toMatch(/at most 0 mm/);
   });
@@ -717,7 +720,7 @@ describe('review round 5', () => {
 describe('review round 6', () => {
   const gfx = (over: Partial<Graphic>): Graphic => ({
     id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'rect', sides: 4, ratio: 0.5, corner: 0 }, x: 0, y: 0, w: 20, h: 10,
-    lockAspect: false, rotation: 0, mirror: false, mode: 'deboss', depth: 0.8, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'deboss', depth: 0.8, slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
   });
   const rect = () => builtinShape('rect', 4, 0.5, 0);
   const litho = (faceId: string, frame: { x: number; y: number; w: number; h: number }, max = 3, dark = false) => {
@@ -859,7 +862,7 @@ describe('review round 7', () => {
 describe('review round 8', () => {
   const gfx = (over: Partial<Graphic>): Graphic => ({
     id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'rect', sides: 5, ratio: 0.45, corner: 0 }, x: 0, y: 0, w: 30, h: 20,
-    lockAspect: false, rotation: 0, mirror: false, mode: 'inlay', depth: 0.6, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'inlay', depth: 0.6, slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
   });
   const shape = (s: 'rect' | 'circle' | 'star' | 'plus', over: Partial<Graphic>, ratio = 0.45, corner = 0) =>
     placeGraphic(gfx({ source: { kind: 'shape', shape: s, sides: 5, ratio, corner }, ...over }), builtinShape(s, 5, ratio, corner));
@@ -875,19 +878,19 @@ describe('review round 8', () => {
     const faces = s.faces();
     const solids = s.build();
     const removed = (out: ReturnType<typeof applyGraphics>) => solids.base.volume() - out.solids.base.volume();
-    for (const color of ['#00ff00', '#ff0000']) {
-      const two = applyGraphics(solids, faces, [shape('rect', {}), shape('rect', { id: 'g2', x: 10, color })]);
+    for (const slot of [2, 1]) {
+      const two = applyGraphics(solids, faces, [shape('rect', {}), shape('rect', { id: 'g2', x: 10, slot })]);
       // Two 30 x 20 mm pockets 0.6 mm deep, overlapping by 20 x 20 mm.
       expect(removed(two)).toBeCloseTo(480, 0);
-      expect(totalFill(two), color).toBeCloseTo(480, 0);
+      expect(totalFill(two), `slot ${slot}`).toBeCloseTo(480, 0);
     }
     const engraved = applyGraphics(solids, faces, [shape('rect', { mode: 'deboss', depth: 0.5, x: 10 }), shape('rect', {})]);
     expect(totalFill(engraved)).toBeCloseTo(360, 0);
     // White letters inlaid on a red disc keep their colour.
-    const letters = shape('star', { id: 'g2', w: 16, h: 16, color: '#ffffff' });
+    const letters = shape('star', { id: 'g2', w: 16, h: 16, slot: 3 });
     const badge = applyGraphics(solids, faces, [shape('circle', { w: 40, h: 30, depth: 0.8 }), letters]);
-    const alone = applyGraphics(solids, faces, [letters]).inlays['base::#ffffff'].solid.volume();
-    expect(badge.inlays['base::#ffffff'].solid.volume()).toBeCloseTo(alone, 1);
+    const alone = applyGraphics(solids, faces, [letters]).inlays['base::g2'].solid.volume();
+    expect(badge.inlays['base::g2'].solid.volume()).toBeCloseTo(alone, 1);
     expect(totalFill(badge)).toBeCloseTo(removed(badge), 0);
   });
 
@@ -1021,7 +1024,7 @@ describe('review round 8', () => {
 describe('review round 9', () => {
   const gfx = (over: Partial<Graphic>): Graphic => ({
     id: 'g', faceId: 'front', source: { kind: 'shape', shape: 'rect', sides: 5, ratio: 0.5, corner: 0 }, x: 0, y: 0, w: 30, h: 20,
-    lockAspect: false, rotation: 0, mirror: false, mode: 'inlay', depth: 0.6, color: '#ff0000', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+    lockAspect: false, rotation: 0, mirror: false, mode: 'inlay', depth: 0.6, slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
   });
   type Shape = 'rect' | 'circle' | 'star' | 'ring' | 'moon';
   const shape = (s: Shape, over: Partial<Graphic>, corner = 0) =>
@@ -1042,7 +1045,7 @@ describe('review round 9', () => {
     // The middle of a 1 mm ring cut through a wall falls out as a speck.
     const tiny = shape('ring', { id: 't', faceId: 'left', mode: 'cut', w: 1, h: 1 });
     const out = applyGraphics(s.build(), s.faces(), [inlay, plate, tiny]);
-    const fill = out.inlays['base::#ff0000'].solid;
+    const fill = out.inlays['base::g'].solid;
     expect(out.solids.base.decompose().some((m) => m.volume() < -1)).toBe(true);
     expect(realOverlap(fill, out.solids.base)).toBeLessThan(0.01);
     expect(overlap(fill, out.solids.base)).toBeLessThan(0.01);
@@ -1050,19 +1053,21 @@ describe('review round 9', () => {
 
   it('colour stays out of the body where pockets of one colour nearly meet on a raised ring', () => {
     const s = setup('drawers');
-    const marks: [Graphic['mode'], Shape, number, number, number, number, number, number, string][] = [
-      ['deboss', 'rect', 25.02, 19.51, 9.16, -4.07, 0, 1.22, '#0000ff'],
-      ['deboss', 'star', 38.68, 15.91, 17.29, 9.61, -38, 0.22, '#ff0000'],
-      ['emboss', 'ring', 36.2, 8.89, 15.79, -4.66, 0, 2.11, '#0000ff'],
-      ['inlay', 'rect', 29.8, 18.56, 12.43, -8.86, 0, 1.75, '#00ff00'],
-      ['inlay', 'moon', 34.99, 18.38, 20.54, 5.56, 0, 1.73, '#00ff00'],
+    const marks: [Graphic['mode'], Shape, number, number, number, number, number, number][] = [
+      ['deboss', 'rect', 25.02, 19.51, 9.16, -4.07, 0, 1.22],
+      ['deboss', 'star', 38.68, 15.91, 17.29, 9.61, -38, 0.22],
+      ['emboss', 'ring', 36.2, 8.89, 15.79, -4.66, 0, 2.11],
+      ['inlay', 'rect', 29.8, 18.56, 12.43, -8.86, 0, 1.75],
+      ['inlay', 'moon', 34.99, 18.38, 20.54, 5.56, 0, 1.73],
     ];
     for (const corner of [0, 0.15]) {
-      const gs = marks.map(([mode, shp, w, h, x, y, rotation, depth, color], i) => shape(shp, { id: `g${i}`, faceId: 'left', mode, w, h, x, y, rotation, depth, color }, corner));
+      const gs = marks.map(([mode, shp, w, h, x, y, rotation, depth], i) => shape(shp, { id: `g${i}`, faceId: 'left', mode, w, h, x, y, rotation, depth, slot: 2 }, corner));
       const out = applyGraphics(s.build(), s.faces(), gs);
-      const fill = out.inlays['sleeve::#00ff00'].solid;
-      expect(overlap(fill, out.solids.sleeve), `corner ${corner}`).toBeLessThan(0.01);
-      expect(realOverlap(fill, out.solids.sleeve), `corner ${corner}`).toBeLessThan(0.01);
+      expect(Object.keys(out.inlays).sort()).toEqual(['sleeve::g3', 'sleeve::g4']);
+      for (const inl of Object.values(out.inlays)) {
+        expect(overlap(inl.solid, out.solids.sleeve), `corner ${corner}`).toBeLessThan(0.01);
+        expect(realOverlap(inl.solid, out.solids.sleeve), `corner ${corner}`).toBeLessThan(0.01);
+      }
     }
   });
 
@@ -1090,7 +1095,7 @@ describe('review round 9', () => {
     const pic = photo({ id: 'l', w: 40, h: 10, y: low });
     const out = applyGraphics(solids, faces, [shape('rect', { depth: 3.5, w: 30, h: 4, y: low }), pic]);
     const ideal = applyGraphics(solids, faces, [pic]).solids.base;
-    const fill = out.inlays['base::#ff0000']?.solid;
+    const fill = out.inlays['base::g']?.solid;
     const gap = ideal.subtract(out.solids.base);
     expect((fill ? gap.subtract(fill) : gap).volume()).toBeLessThan(0.05);
     // No fin of the plate stands just inside the window's edge.
@@ -1120,5 +1125,149 @@ describe('review round 9', () => {
         const [a, b] = [spans[i], spans[j]];
         expect(a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0, `${i} ${j}`).toBe(true);
       }
+  });
+});
+
+describe('owner requests: tolerance and the sliding lid', () => {
+  /** Steepest overhang (degrees from vertical) among downward-facing surfaces above the bed. */
+  function steepestOverhang(m: Manifold) {
+    const mesh = m.getMesh();
+    const P = mesh.vertProperties, T = mesh.triVerts, np = mesh.numProp;
+    let worst = 0;
+    for (let i = 0; i < T.length; i += 3) {
+      const a = [0, 1, 2].map((k) => [P[T[i + k] * np], P[T[i + k] * np + 1], P[T[i + k] * np + 2]]);
+      const u = a[1].map((v, k) => v - a[0][k]), w = a[2].map((v, k) => v - a[0][k]);
+      const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+      const len = Math.hypot(n[0], n[1], n[2]);
+      const area = len / 2;
+      if (area < 1e-3 || Math.min(a[0][2], a[1][2], a[2][2]) < 0.01) continue;
+      if (n[2] / len < -1e-3) worst = Math.max(worst, 90 - (Math.acos(-n[2] / len) * 180) / Math.PI);
+    }
+    return worst;
+  }
+
+  it('sliding fits default to 0.1 mm; screw threads and the hinge pin keep 0.4 mm', () => {
+    expect(DEFAULT_PARAMS.tolerance).toBe(0.1);
+    expect(DEFAULT_PARAMS.drawerClearance).toBe(0.1);
+    expect(DEFAULT_PARAMS.threadClearance).toBe(0.4);
+    expect(DEFAULT_PARAMS.hingeGap).toBe(0.4);
+    for (const type of ['lidded', 'sliding', 'hinged', 'polygon', 'drawers'] as const) {
+      const defs = [...BOX_TYPES[type].dims, ...BOX_TYPES[type].groups.flatMap((g) => g.params)];
+      expect(defs.some((d) => /tolerance/i.test(d.label)), type).toBe(true);
+      expect(setup(type).errors, type).toEqual([]);
+    }
+  });
+
+  it('the sliding lid sits at least 4 mm in from the outside, with square corners and a solid rim', () => {
+    const s = setup('sliding');
+    const W = s.R.W as number, D = s.R.D as number, H = s.R.H as number, g = s.R.g as number;
+    const { base, lid } = s.build();
+    const lb = lid.boundingBox();
+    // The lid's top is 4 mm in from the sides and back (plus the tolerance); its bottom reaches the groove.
+    expect(lb.max[0]).toBeCloseTo(W / 2 - 4 + g - 0.1, 2);
+    // At the very top (a hair below it the dovetail has started to widen).
+    const top = lid.trimByPlane([0, 0, 1], H - 0.05).boundingBox();
+    const widen = (g * 0.05) / (s.R.lt as number);
+    expect(top.max[0]).toBeCloseTo(W / 2 - 4 - 0.1 + widen, 4);
+    expect(top.max[1]).toBeCloseTo(D / 2 - 4 - 0.1 + widen, 4);
+    // Square corners: right in the lid's back corner there is lid, and around it the rim.
+    const at = (m: Manifold, x: number, y: number, z: number) => overlap(m, box(x - 0.05, x + 0.05, y - 0.05, y + 0.05, z - 0.05, z + 0.05)) > 0.0009;
+    expect(at(lid, W / 2 - 4.3, D / 2 - 4.3, H - 0.3)).toBe(true);
+    for (const [x, y] of [[W / 2 - 1.5, 0], [0, D / 2 - 1.5], [W / 2 - 2, D / 2 - 2]]) expect(at(base, x, y, H - 0.3), `${x},${y}`).toBe(true);
+  });
+
+  for (const over of [{}, { lidInset: 8 }, { lidInset: 6, wall: 1.2, radius: 0 }] as Partial<BoxParams>[])
+    it(`the sliding box and lid print without supports ${JSON.stringify(over)}`, () => {
+      const s = setup('sliding', over);
+      expect(s.errors).toEqual([]);
+      const { base, lid } = s.build();
+      expect(steepestOverhang(base)).toBeLessThanOrEqual(45.1);
+      // The lid prints the way it sits, from its underside.
+      expect(steepestOverhang(lid.translate([0, 0, -lid.boundingBox().min[2]]))).toBeLessThanOrEqual(45.1);
+      for (const dy of [5, 40]) expect(overlap(lid.translate([0, -dy, 0]), base)).toBeLessThan(0.01);
+    });
+
+  it('sized from the inside, the opening under the lid is the size typed', () => {
+    const s = setup('sliding', { dimsMode: 'inner', width: 80, depth: 50, height: 30 });
+    expect(s.R.inner).toEqual([80, 50, 30]);
+    const W = s.R.W as number, D = s.R.D as number, H = s.R.H as number;
+    const { base } = s.build();
+    // A block the size of the inside, standing on the floor, fits through the opening without touching.
+    const f = s.p.floor;
+    const t = s.p.wall;
+    const block = box(-40 + 0.05, 40 - 0.05, -D / 2 + t + 0.05, -D / 2 + t + 50 - 0.05, f + 0.05, f + 30 - 0.05);
+    expect(overlap(block, base)).toBeLessThan(0.01);
+    expect(W).toBe(88);
+    expect(H).toBeCloseTo(30 + f + (s.R.lt as number), 6);
+  });
+
+  it('very round corners are refused with advice that is then accepted', () => {
+    const s = setup('sliding', { radius: 10 });
+    const m = /corner radius of at most ([\d.]+) mm, or a lid inset of at least ([\d.]+) mm/.exec(s.errors[0]?.text ?? '');
+    expect(m, s.errors[0]?.text).toBeTruthy();
+    expect(setup('sliding', { radius: Number(m![1]) }).errors).toEqual([]);
+    expect(setup('sliding', { radius: 10, lidInset: Number(m![2]) }).errors).toEqual([]);
+  });
+});
+
+describe('owner requests: AMS colours and plates', () => {
+  const part = (id: string, w: number, d: number, role: 'body' | 'inlay' = 'body', parentId?: string) =>
+    ({ id, name: id, role, parentId, print: IDENTITY, printMin: [-w / 2, -d / 2, 0], printMax: [w / 2, d / 2, 20] }) as unknown as PartMesh;
+
+  it('parts in different filaments go on separate plates, and colour inlays print with their part', () => {
+    const bed = PRINTERS.find((b) => b.id === 'bed256')!;
+    const parts = [part('base', 90, 64), part('lid', 90, 64), part('inlay-lidg2', 10, 10, 'inlay', 'lid')];
+    expect(layoutPlates(parts, bed, () => 0).plates.length).toBe(1);
+    const split = layoutPlates(parts, bed, (id) => (id === 'lid' ? 1 : 0));
+    expect(split.plates.map((p) => [p.slot, p.bodies])).toEqual([[0, ['base']], [1, ['lid']]]);
+    expect(split.plates[1].matrices.get('inlay-lidg2')).toEqual(split.plates[1].matrices.get('lid'));
+    expect(split.plates[0].matrices.has('inlay-lidg2')).toBe(false);
+    // Shown side by side: the second plate sits one bed plus a gap to the right.
+    expect(split.matrices.get('lid')![12] - split.plates[1].matrices.get('lid')![12]).toBeCloseTo(bed.w + PLATE_GAP, 6);
+  });
+
+  it('parts of one filament that do not fit one bed spread over more plates', () => {
+    const bed = PRINTERS.find((b) => b.id === 'bed180')!;
+    const L = layoutPlates(['a', 'b', 'c'].map((id) => part(id, 160, 100)), bed, () => 0);
+    expect(L.overflow).toEqual([]);
+    expect(L.plates.map((p) => p.bodies.length)).toEqual([1, 1, 1]);
+  });
+
+  it('the 3MF lists every AMS slot in order and gives each object and colour part its filament number', () => {
+    const p = { ...DEFAULT_PARAMS } as BoxParams;
+    const disc = placeGraphic(
+      { id: 'g2', faceId: 'lid-top', source: { kind: 'shape', shape: 'circle', sides: 5, ratio: 0.5, corner: 0 }, x: 0, y: 0, w: 20, h: 20, lockAspect: true, rotation: 0, mirror: false, mode: 'inlay', depth: 0.6, slot: 2, lithoMin: 0.8, lithoMax: 3, hidden: false },
+      builtinShape('circle'),
+    );
+    const res = runBuild({ id: 1, type: 'lidded', params: p, graphics: [disc], quality: 'draft' });
+    const items = res.parts.map((x) => ({ part: x, matrix: x.print, slot: x.role === 'inlay' ? x.slot! : x.id === 'lid' ? 1 : 0 }));
+    // Slot 4 holds the same colour as slot 1.
+    const zip = unzipSync(to3MF(items, ['#2f8a87', '#ece6d6', '#f0bf2c', '#2f8a87'], 'Test'));
+    const model = strFromU8(zip['3D/3dmodel.model']);
+    const colours = [...model.matchAll(/displaycolor="(#[0-9A-F]{6})FF"/g)].map((m) => m[1]);
+    expect(colours.slice(0, 3)).toEqual(['#2F8A87', '#ECE6D6', '#F0BF2C']);
+    expect(new Set(colours).size).toBe(4);
+    const config = strFromU8(zip['Metadata/model_settings.config']);
+    const objects = [...config.matchAll(/<object id="(\d+)">(.*?)<\/object>/gs)].map(([, , body]) => body);
+    const extruders = (body: string) => [...body.matchAll(/key="extruder" value="(\d+)"/g)].map((m) => +m[1]);
+    expect(objects.map(extruders)).toEqual([[1], [2, 2, 3]]);
+    expect(objects[1]).toMatch(/value="Lid – circle"/);
+  });
+
+  it('projects saved before filament slots keep their colours', () => {
+    const shape = { kind: 'shape', shape: 'star', sides: 5, ratio: 0.5, corner: 0 };
+    const p = normalizeProject({
+      type: 'lidded',
+      color: '#b3263a',
+      graphics: [
+        { id: 'a', faceId: 'front', source: shape, mode: 'inlay', color: '#ece6d6' },
+        { id: 'b', faceId: 'front', source: shape, mode: 'inlay', color: '#b3263a' },
+        { id: 'c', faceId: 'front', source: shape, mode: 'deboss', color: '#123456' },
+      ],
+    });
+    expect(p.filaments.slice(0, 2)).toEqual(['#b3263a', '#ece6d6']);
+    expect(p.filaments.length).toBe(4);
+    expect(p.graphics.map((g) => g.slot)).toEqual([1, 0, 1]);
+    expect(p.partSlots).toEqual({});
   });
 });

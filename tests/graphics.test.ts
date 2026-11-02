@@ -15,7 +15,7 @@ function graphic(over: Partial<Graphic>): Graphic {
   return {
     id: 'g1', faceId: 'front', source: { kind: 'shape', shape: 'star', sides: 5, ratio: 0.45, corner: 0 },
     x: 0, y: 0, w: 30, h: 30, lockAspect: true, rotation: 0, mirror: false, mode: 'emboss', depth: 1,
-    color: '#d0402b', lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
+    slot: 1, lithoMin: 0.8, lithoMax: 3, hidden: false, ...over,
   };
 }
 
@@ -37,7 +37,8 @@ describe('graphics on faces', () => {
       const v = out.solids.base.volume();
       expect(out.solids.base.status()).toBe('NoError');
       expect(Math.sign(v - v0)).toBe(sign);
-      expect(out.colorIds.size).toBe(1);
+      // They print in the part's own filament, so nothing is painted another colour.
+      expect(out.colorIds.size).toBe(0);
     }
     releaseAll();
   });
@@ -97,18 +98,21 @@ describe('graphics on faces', () => {
     releaseAll();
   });
 
-  it('end-to-end build returns coloured groups', () => {
+  it('end-to-end build returns a colour body per inlay, with its AMS slot', () => {
     const type = 'lidded';
     const p = { ...DEFAULT_PARAMS } as BoxParams;
     const g1 = placeGraphic(graphic({ faceId: 'front', mode: 'deboss', w: 40, h: 20, lockAspect: false }), builtinShape('rect'));
-    const g2 = placeGraphic(graphic({ id: 'g2', faceId: 'lid-top', mode: 'inlay', color: '#2255ff', w: 30, h: 30 }), builtinShape('circle'));
+    const g2 = placeGraphic(graphic({ id: 'g2', faceId: 'lid-top', mode: 'inlay', slot: 2, w: 30, h: 30, source: { kind: 'shape', shape: 'circle', sides: 5, ratio: 0.45, corner: 0 } }), builtinShape('circle'));
     const res = runBuild({ id: 1, type, params: p, graphics: [g1, g2], quality: 'fine' });
-    expect(res.parts.map((x) => x.id)).toEqual(['base', 'lid', 'inlay-lid2255ff']);
-    const base = res.parts[0];
-    expect(base.groups.length).toBe(2);
-    expect(base.materials).toEqual([null, '#d0402b']);
-    expect(base.groups.reduce((s, g) => s + g.count, 0)).toBe(base.indices.length);
-    expect(res.parts[2].role).toBe('inlay');
+    expect(res.parts.map((x) => x.id)).toEqual(['base', 'lid', 'inlay-lidg2']);
+    const [base, lid, inlay] = res.parts;
+    // The engraving is the box's own colour; the lid's pocket shows the inlay's slot.
+    expect(base.materials).toEqual([null]);
+    expect(lid.materials).toEqual([null, 2]);
+    expect(lid.groups.reduce((s, g) => s + g.count, 0)).toBe(lid.indices.length);
+    expect(inlay.role).toBe('inlay');
+    expect(inlay.slot).toBe(2);
+    expect(inlay.name).toBe('Lid – circle');
     expect(res.parts[1].printMax[2] - res.parts[1].printMin[2]).toBeCloseTo(12 + 6, 0); // lid height + plug lip
     console.log('end-to-end ms', res.ms.toFixed(0), 'tris', res.parts.map((x) => x.triangles));
   });
